@@ -210,6 +210,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/api/warnings", s.requireAuth(s.handleWarnings))
 	mux.HandleFunc("/api/config", s.requireAuth(s.handleConfig))
 	mux.HandleFunc("/api/fs/list", s.requireAuth(s.handleFSList))
+	mux.HandleFunc("/api/parse-command", s.requireAuth(s.handleParseCommand))
 	mux.HandleFunc("/api/events", s.requireAuth(s.handleEvents))
 	mux.HandleFunc("/api/app/exit", s.requireAuth(s.handleExit))
 	mux.HandleFunc("/api/app/focus", s.requireAuth(s.handleFocus))

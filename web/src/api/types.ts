@@ -62,6 +62,19 @@ export interface EventsPayload {
   warnings?: Warning[]
 }
 
+/** 命令解析结果. */
+export interface ParsedCommand {
+  program: string
+  args: string[]
+  working_dir?: string
+  env_vars?: Record<string, string>
+  stdin?: string
+  stdout?: string
+  stderr?: string
+  warnings?: string[]
+  resolved: boolean
+}
+
 /** 应用配置. */
 export interface AppConfig {
   quiet_launch: boolean

@@ -5,6 +5,7 @@ import type {
   EventsPayload,
   FsListing,
   Health,
+  ParsedCommand,
   Task,
   Warning,
 } from './types'
@@ -100,6 +101,13 @@ export const appApi = {
     request<AppConfig>('/api/config', {
       method: 'PUT',
       body: JSON.stringify(config),
+    }),
+
+  /** 把一条命令行解析成任务字段, 仅用于预填表单. */
+  parseCommand: (command: string) =>
+    request<ParsedCommand>('/api/parse-command', {
+      method: 'POST',
+      body: JSON.stringify({ command }),
     }),
 
   listDir: (path?: string, showHidden?: boolean) => {

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FolderOpen, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, FolderOpen, Plus, Trash2 } from 'lucide-react'
+import { appApi } from '@/api/client'
 import type { Task, Trigger, TriggerKind } from '@/api/types'
 import {
+  baseName,
   cn,
   envToList,
   isoToLocalInput,
@@ -57,6 +59,10 @@ export function TaskEditor({ open, task, onClose, onSave }: TaskEditorProps) {
   const [envRows, setEnvRows] = useState<Array<{ key: string; value: string }>>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 从命令派生任务: 粘贴一条命令, 解析后填进表单, 不直接创建.
+  const [commandInput, setCommandInput] = useState('')
+  const [parsing, setParsing] = useState(false)
+  const [parseWarnings, setParseWarnings] = useState<string[]>([])
   const [picker, setPicker] = useState<null | 'program' | 'working_dir' | 'stdout' | 'stderr' | 'stdin'>(
     null,
   )
@@ -88,6 +94,8 @@ export function TaskEditor({ open, task, onClose, onSave }: TaskEditorProps) {
       setEnvRows([])
     }
     setError(null)
+    setCommandInput('')
+    setParseWarnings([])
   }, [open, task])
 
   const trigger = form.trigger ?? { kind: 'Manual' }
@@ -103,6 +111,38 @@ export function TaskEditor({ open, task, onClose, onSave }: TaskEditorProps) {
     () => Boolean(form.name?.trim()) && Boolean(form.program?.trim()) && !saving,
     [form.name, form.program, saving],
   )
+
+  // handleParseCommand 把命令拆成任务字段填进表单.
+  //
+  // 只预填, 不保存: 用户可以继续改, 再自己点 "创建任务".
+  const handleParseCommand = async () => {
+    const raw = commandInput.trim()
+    if (!raw) return
+    setParsing(true)
+    setParseWarnings([])
+    setError(null)
+    try {
+      const parsed = await appApi.parseCommand(raw)
+      setForm((current) => ({
+        ...current,
+        // 名称留空时用程序名兜底, 让用户少填一项.
+        name: current.name?.trim() ? current.name : baseName(parsed.program),
+        program: parsed.program,
+        working_dir: parsed.working_dir ?? current.working_dir,
+        stdin: parsed.stdin ?? '',
+        stdout: parsed.stdout ?? '',
+        stderr: parsed.stderr ?? '',
+        env_vars: parsed.env_vars ?? {},
+      }))
+      setArgs(parsed.args ?? [])
+      setEnvRows(envToList(parsed.env_vars))
+      setParseWarnings(parsed.warnings ?? [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '命令解析失败')
+    } finally {
+      setParsing(false)
+    }
+  }
 
   const handleSubmit = async () => {
     if (!canSave) return
@@ -152,6 +192,51 @@ export function TaskEditor({ open, task, onClose, onSave }: TaskEditorProps) {
             {error}
           </div>
         ) : null}
+
+        {/* 从命令派生. */}
+        <section className="space-y-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-3">
+          <div>
+            <h3 className="text-[13px] font-semibold text-[var(--content)]">从命令填充</h3>
+            <p className="mt-0.5 text-[11px] text-[var(--content-faint)]">
+              粘贴一条命令, 自动拆出程序, 参数, 环境变量与重定向; 只填表不创建
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={commandInput}
+              placeholder={`docker run --rm -v /tmp/d:/d -e MODE=prod nginx:latest`}
+              className="font-mono text-[12px]"
+              onChange={(event) => setCommandInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void handleParseCommand()
+                }
+              }}
+            />
+            <Button
+              variant="outline"
+              size="md"
+              disabled={parsing || !commandInput.trim()}
+              onClick={() => void handleParseCommand()}
+            >
+              {parsing ? '解析中' : '解析'}
+            </Button>
+          </div>
+          {parseWarnings.length > 0 ? (
+            <ul className="space-y-1">
+              {parseWarnings.map((warning, index) => (
+                <li
+                  key={index}
+                  className="flex items-start gap-1.5 text-[11px] text-[var(--warning)]"
+                >
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span>{warning}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
 
         {/* 基础信息. */}
         <section className="space-y-4">
