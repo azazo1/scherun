@@ -61,8 +61,14 @@ type Server struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	done   chan struct{}
-	once   sync.Once
+	// done 在服务完全关闭后关闭, 供外部等待.
+	done chan struct{}
+	// draining 在开始优雅关闭时立即关闭, 供长连接 (SSE) 主动退出.
+	//
+	// 不能只依赖 done: http.Server.Shutdown 会等所有活动连接结束才返回,
+	// 而 SSE 又在等 done 关闭, 两者互相等待, 只能靠超时打破.
+	draining chan struct{}
+	once     sync.Once
 }
 
 // New 创建服务, 不开始监听.
@@ -81,12 +87,13 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		opts:    opts,
-		logger:  opts.Logger.With("component", "localapi"),
-		auth:    auth,
-		webFS:   opts.WebFS,
-		started: time.Now(),
-		done:    make(chan struct{}),
+		opts:     opts,
+		logger:   opts.Logger.With("component", "localapi"),
+		auth:     auth,
+		webFS:    opts.WebFS,
+		started:  time.Now(),
+		done:     make(chan struct{}),
+		draining: make(chan struct{}),
 	}, nil
 }
 
@@ -169,6 +176,8 @@ func (s *Server) Token() string { return s.auth.LaunchToken() }
 // Shutdown 关闭服务并删除 runtime.json.
 func (s *Server) Shutdown(ctx context.Context) {
 	s.once.Do(func() {
+		// 先让 SSE 等长连接主动退出, 否则 Shutdown 会一直等到 ctx 超时.
+		close(s.draining)
 		if s.cancel != nil {
 			s.cancel()
 		}

@@ -47,6 +47,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			// 客户端关闭了页面或连接.
+			return
+		case <-s.draining:
+			// 服务开始关闭: 主动退出, 让 http.Server.Shutdown 能及时返回.
 			return
 		case <-s.done:
 			return
