@@ -39,7 +39,11 @@ export function FilePicker({
   const [showHidden, setShowHidden] = useState(false)
 
   const load = useCallback(
-    async (path?: string, hidden = showHidden) => {
+    // keepInput 为真时保留用户正在输入的路径.
+    //
+    // 自动切换隐藏显示时会重新加载当前目录, 此时若同步输入框,
+    // 用户刚敲下的 "/." 会被覆盖成当前目录, 后缀直接丢失.
+    async (path?: string, hidden = showHidden, keepInput = false) => {
       setLoading(true)
       setError(null)
       try {
@@ -47,7 +51,9 @@ export function FilePicker({
         setListing(result)
         // 请求的是文件时后端会把它放在 selected 里, 直接作为待选项.
         setSelected(result.selected ?? null)
-        setPathInput(result.selected ?? result.path)
+        if (!keepInput) {
+          setPathInput(result.selected ?? result.path)
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : '无法读取目录')
       } finally {
@@ -70,7 +76,8 @@ export function FilePicker({
   useEffect(() => {
     if (filterIsHidden && !showHidden) {
       setShowHidden(true)
-      void load(listing?.path, true)
+      // 保留输入: 用户正在敲路径, 不能被重新加载覆盖.
+      void load(listing?.path, true, true)
     }
   }, [filterIsHidden, showHidden, listing?.path, load])
 
@@ -170,7 +177,8 @@ export function FilePicker({
             onClick={() => {
               const next = !showHidden
               setShowHidden(next)
-              void load(listing?.path, next)
+              // 只切换隐藏条目的显示, 不动用户已经输入的路径.
+              void load(listing?.path, next, true)
             }}
           >
             <Eye className="h-3.5 w-3.5" />
