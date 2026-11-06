@@ -1,0 +1,34 @@
+# 构建产物
+/dist/
+/bin/
+
+# 临时目录 (调试数据、开发实例数据)
+.tmp/
+
+# 前端依赖与构建产物
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+
+# go:embed 目录里的前端构建产物, 只保留占位文件
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+
+# 参考项目与本地环境
+.references/
+.agents/
+
+# 运行时数据 (防止误提交到仓库根目录)
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# 密钥
+secrets/
+
+# 编辑器与系统
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
