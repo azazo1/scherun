@@ -3,7 +3,7 @@ import type { ButtonHTMLAttributes } from 'react'
 import { cn } from '@/lib/utils'
 
 /** 按钮变体. */
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline'
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'success' | 'outline'
 /** 按钮尺寸. */
 type Size = 'sm' | 'md' | 'lg' | 'icon'
 
@@ -16,6 +16,8 @@ const variantClasses: Record<Variant, string> = {
     'bg-transparent text-[var(--content-muted)] hover:bg-[var(--surface-sunken)] hover:text-[var(--content)]',
   danger:
     'bg-transparent text-[var(--danger)] hover:bg-[color-mix(in_oklab,var(--danger)_14%,transparent)]',
+  success:
+    'bg-transparent text-[var(--success)] hover:bg-[color-mix(in_oklab,var(--success)_14%,transparent)]',
   outline:
     'border border-[var(--border-subtle)] bg-transparent text-[var(--content-muted)] hover:border-[var(--border-strong)] hover:text-[var(--content)]',
 }

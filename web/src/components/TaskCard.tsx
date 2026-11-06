@@ -173,25 +173,25 @@ export function TaskCard({
       <div className="flex shrink-0 items-center gap-1">
         {running ? (
           <Button
-            variant="ghost"
+            variant="danger"
             size="icon"
             aria-label="停止任务"
             title="停止"
             disabled={busy}
             onClick={() => onStop(task)}
           >
-            <Square className="h-4 w-4" />
+            <Square className="h-4 w-4" fill="currentColor" />
           </Button>
         ) : (
           <Button
-            variant="ghost"
+            variant="success"
             size="icon"
             aria-label="运行任务"
             title="运行"
             disabled={busy || disabled}
             onClick={() => onRun(task)}
           >
-            <Play className="h-4 w-4" />
+            <Play className="h-4 w-4" fill="currentColor" />
           </Button>
         )}
         <Button
