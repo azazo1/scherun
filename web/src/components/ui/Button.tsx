@@ -40,7 +40,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       ref={ref}
       type={type}
       className={cn(
-        'inline-flex cursor-pointer items-center rounded-lg font-medium transition-colors',
+        // whitespace-nowrap: 按钮文案不换行, 否则在拥挤的横向布局里会被挤成竖排.
+        // shrink-0: 按钮不被 flex 兄弟压缩, 保证图标与文字都完整可见.
+        'inline-flex shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-lg font-medium transition-colors',
         'disabled:pointer-events-none disabled:opacity-45',
         variantClasses[variant],
         sizeClasses[size],

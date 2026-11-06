@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ChevronRight, File, Folder, FolderUp, HardDrive, Home } from 'lucide-react'
+import { ChevronRight, Eye, File, Folder, FolderUp, HardDrive, Home } from 'lucide-react'
 import { appApi } from '@/api/client'
 import type { FsListing } from '@/api/types'
 import { cn } from '@/lib/utils'
 import { Button } from './ui/Button'
+import { Input } from './ui/Input'
 import { Dialog } from './ui/Overlay'
 
 interface FilePickerProps {
@@ -31,26 +32,50 @@ export function FilePicker({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
+  // 路径输入框的内容, 与浏览到的目录保持同步, 也允许用户直接改写.
+  const [pathInput, setPathInput] = useState('')
+  // 是否列出隐藏条目, 打开 ~/.local/bin 这类路径时必须开启.
+  const [showHidden, setShowHidden] = useState(false)
 
-  const load = useCallback(async (path?: string) => {
-    setLoading(true)
-    setError(null)
-    try {
-      const result = await appApi.listDir(path)
-      setListing(result)
-      setSelected(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '无法读取目录')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const load = useCallback(
+    async (path?: string, hidden = showHidden) => {
+      setLoading(true)
+      setError(null)
+      try {
+        const result = await appApi.listDir(path, hidden)
+        setListing(result)
+        // 请求的是文件时后端会把它放在 selected 里, 直接作为待选项.
+        setSelected(result.selected ?? null)
+        setPathInput(result.selected ?? result.path)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '无法读取目录')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [showHidden],
+  )
+
+  // submitPath 把输入框里的路径交给后端解析.
+  //
+  // 不靠扩展名猜是文件还是目录: /usr/local/bin/python3 这类可执行文件
+  // 没有扩展名, 猜错就会跳到它的父目录. 统一由后端 stat 后判定,
+  // 若是文件则回填 selected, 由用户确认后再点 "选择".
+  const submitPath = () => {
+    const raw = pathInput.trim()
+    if (!raw) return
+    void load(raw)
+  }
 
   useEffect(() => {
     if (open) {
-      void load()
+      setShowHidden(false)
+      setPathInput('')
+      void load(undefined, false)
     }
-  }, [open, load])
+    // 只在打开时重置, load 的身份变化不应重新触发.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   const canSelect = (entry: { is_dir: boolean; selectable: boolean }) => {
     if (mode === 'dir') return entry.is_dir
@@ -112,6 +137,38 @@ export function FilePicker({
               {root === '/' ? '根目录' : root.split('/').pop() || root}
             </Button>
           ))}
+          <Button
+            variant={showHidden ? 'secondary' : 'ghost'}
+            size="sm"
+            title="显示以点开头的隐藏文件与目录"
+            onClick={() => {
+              const next = !showHidden
+              setShowHidden(next)
+              void load(listing?.path, next)
+            }}
+          >
+            <Eye className="h-3.5 w-3.5" />
+            {showHidden ? '隐藏已显示' : '显示隐藏'}
+          </Button>
+        </div>
+
+        {/* 路径输入: 可以直接粘贴或手输绝对路径, 回车跳转. */}
+        <div className="flex gap-2">
+          <Input
+            value={pathInput}
+            placeholder="直接输入或粘贴绝对路径, 回车跳转"
+            className="font-mono text-[12px]"
+            onChange={(event) => setPathInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                submitPath()
+              }
+            }}
+          />
+          <Button variant="outline" size="md" onClick={submitPath}>
+            跳转
+          </Button>
         </div>
 
         {/* 当前路径. */}

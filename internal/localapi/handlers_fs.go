@@ -32,6 +32,11 @@ type fsResponse struct {
 	Home string `json:"home"`
 	// Roots 是可以快速跳转的根目录.
 	Roots []string `json:"roots"`
+	// ShowHidden 表示当前是否列出了隐藏条目.
+	ShowHidden bool `json:"show_hidden"`
+	// Selected 是请求路径本身指向的文件 (若请求的是文件).
+	// 界面据此把它标为已选中, 用户再点 "选择" 即可.
+	Selected string `json:"selected,omitempty"`
 }
 
 // handleFSList 浏览本机目录.
@@ -45,10 +50,15 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	home, _ := os.UserHomeDir()
-	requested := r.URL.Query().Get("path")
+	query := r.URL.Query()
+	requested := query.Get("path")
 	if requested == "" {
 		requested = home
 	}
+	// show_hidden 控制是否列出以点开头的条目.
+	// 默认不显示, 避免列表被配置与缓存目录淹没; 但 ~/.local/bin 这类
+	// 目录本身就在隐藏路径下, 因此必须允许显式打开.
+	showHidden := query.Get("show_hidden") == "1"
 	requested = filepath.Clean(requested)
 	if !filepath.IsAbs(requested) {
 		writeProblem(w, http.StatusBadRequest, "路径必须是绝对路径")
@@ -60,8 +70,10 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusNotFound, "目录不存在: "+requested)
 		return
 	}
-	// 指向文件时改为列出它所在目录.
+	// 指向文件时改为列出它所在目录, 并把该文件标为已选中.
+	selectFile := ""
 	if !info.IsDir() {
+		selectFile = requested
 		requested = filepath.Dir(requested)
 	}
 
@@ -74,8 +86,7 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	entries := make([]fsEntry, 0, len(dirents))
 	for _, dirent := range dirents {
 		name := dirent.Name()
-		// 隐藏文件默认不展示, 避免列表被配置与缓存目录淹没.
-		if strings.HasPrefix(name, ".") {
+		if !showHidden && strings.HasPrefix(name, ".") {
 			continue
 		}
 		full := filepath.Join(requested, name)
@@ -107,11 +118,13 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, fsResponse{
-		Path:    requested,
-		Parent:  parent,
-		Entries: entries,
-		Home:    home,
-		Roots:   volumeRoots(home),
+		Path:       requested,
+		Parent:     parent,
+		Entries:    entries,
+		Home:       home,
+		Roots:      volumeRoots(home),
+		ShowHidden: showHidden,
+		Selected:   selectFile,
 	})
 }
 

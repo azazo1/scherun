@@ -96,4 +96,6 @@ export interface FsListing {
   entries: FsEntry[]
   home: string
   roots: string[]
+  show_hidden: boolean
+  selected?: string
 }

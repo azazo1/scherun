@@ -102,10 +102,13 @@ export const appApi = {
       body: JSON.stringify(config),
     }),
 
-  listDir: (path?: string) =>
-    request<FsListing>(
-      path ? `/api/fs/list?path=${encodeURIComponent(path)}` : '/api/fs/list',
-    ),
+  listDir: (path?: string, showHidden?: boolean) => {
+    const params = new URLSearchParams()
+    if (path) params.set('path', path)
+    if (showHidden) params.set('show_hidden', '1')
+    const query = params.toString()
+    return request<FsListing>(query ? `/api/fs/list?${query}` : '/api/fs/list')
+  },
 
   exit: () => request<{ ok: boolean }>('/api/app/exit', { method: 'POST' }),
 }
