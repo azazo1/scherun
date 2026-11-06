@@ -193,9 +193,15 @@ func asExitError(err error, target **exec.ExitError) bool {
 }
 
 // attachStdio 按配置重定向标准输入输出.
+//
+// 相对路径按任务的工作目录解析, 而不是按 schrun 自身的 cwd:
+// 后者会让 out.log 悄悄落到应用进程的目录里, 与用户预期不符.
 func (p *Process) attachStdio() error {
+	base := p.cmd.Dir
+
 	if p.spec.Stdin != "" {
-		file, err := os.Open(p.spec.Stdin)
+		// 输入文件只读取, 不创建父目录: 目录不存在说明配置有误, 如实报错.
+		file, err := os.Open(resolvePath(base, p.spec.Stdin))
 		if err != nil {
 			return fmt.Errorf("打开标准输入文件失败: %w", err)
 		}
@@ -203,7 +209,11 @@ func (p *Process) attachStdio() error {
 		p.cmd.Stdin = file
 	}
 	if p.spec.Stdout != "" {
-		file, err := os.OpenFile(p.spec.Stdout, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		target := resolvePath(base, p.spec.Stdout)
+		if err := ensureParentDir(target); err != nil {
+			return fmt.Errorf("创建标准输出目录失败: %w", err)
+		}
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
 			return fmt.Errorf("打开标准输出文件失败: %w", err)
 		}
@@ -211,7 +221,11 @@ func (p *Process) attachStdio() error {
 		p.cmd.Stdout = file
 	}
 	if p.spec.Stderr != "" {
-		file, err := os.OpenFile(p.spec.Stderr, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		target := resolvePath(base, p.spec.Stderr)
+		if err := ensureParentDir(target); err != nil {
+			return fmt.Errorf("创建标准错误目录失败: %w", err)
+		}
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
 			return fmt.Errorf("打开标准错误文件失败: %w", err)
 		}
@@ -219,6 +233,28 @@ func (p *Process) attachStdio() error {
 		p.cmd.Stderr = file
 	}
 	return nil
+}
+
+// resolvePath 把相对路径按给定基准目录转成绝对路径.
+//
+// 绝对路径原样返回; 基准目录为空时保持相对路径不变.
+func resolvePath(base, path string) string {
+	if filepath.IsAbs(path) || base == "" {
+		return path
+	}
+	return filepath.Join(base, path)
+}
+
+// ensureParentDir 创建输出文件所在的父目录.
+//
+// 日志目录常常还没建立, 不预先创建会让任务在启动阶段直接失败.
+// 路径本身没有目录部分 (相对文件名) 时无需处理.
+func ensureParentDir(path string) error {
+	dir := filepath.Dir(path)
+	if dir == "." || dir == "" || dir == string(filepath.Separator) {
+		return nil
+	}
+	return os.MkdirAll(dir, 0o755)
 }
 
 // workingDir 决定子进程的工作目录.
