@@ -8,22 +8,10 @@ import (
 	"time"
 
 	"github.com/azazo1/scherun/internal/config"
-	"github.com/azazo1/scherun/internal/proc"
 	"github.com/azazo1/scherun/internal/scheduler"
 	"github.com/azazo1/scherun/internal/store"
 	"github.com/azazo1/scherun/internal/task"
 )
-
-// taskView 是返回给界面的任务视图, 合并了定义与运行状态.
-type taskView struct {
-	task.Task
-	Status    scheduler.Status `json:"status"`
-	PID       int              `json:"pid,omitempty"`
-	StartedAt *time.Time       `json:"started_at,omitempty"`
-	Restarts  int              `json:"restarts"`
-	Failures  int              `json:"failures"`
-	Runnable  bool             `json:"runnable"`
-}
 
 // healthResponse 是健康检查响应.
 type healthResponse struct {
@@ -78,24 +66,7 @@ func (s *Server) listTasks(w http.ResponseWriter) {
 		writeProblem(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	snapshots := s.opts.Scheduler.Snapshots()
-	views := make([]taskView, 0, len(tasks))
-	for _, t := range tasks {
-		snap := snapshots[t.ID]
-		if snap.TaskID == 0 {
-			snap = scheduler.Snapshot{TaskID: t.ID, Status: scheduler.StatusIdle}
-		}
-		views = append(views, taskView{
-			Task:      t,
-			Status:    snap.Status,
-			PID:       snap.PID,
-			StartedAt: snap.StartedAt,
-			Restarts:  snap.Restarts,
-			Failures:  snap.Failures,
-			Runnable:  proc.Runnable(t.Program),
-		})
-	}
-	writeJSON(w, http.StatusOK, views)
+	writeJSON(w, http.StatusOK, s.buildTaskViews(tasks))
 }
 
 // saveTask 新建或更新任务.

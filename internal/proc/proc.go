@@ -281,17 +281,31 @@ func isAppBundle(path string) bool {
 }
 
 // Runnable 判断程序是否可执行, 用于界面提前提示.
+//
+// 判断逻辑必须与 Start 保持一致: 只有程序名 (不含路径分隔符) 时,
+// exec.Command 会沿 PATH 查找, 这里也要先 LookPath, 否则会出现
+// "任务在跑但界面显示程序不可执行" 的矛盾.
 func Runnable(path string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
 	}
-	info, err := os.Stat(path)
+
+	resolved := path
+	if !strings.ContainsAny(path, `/\`) {
+		found, err := exec.LookPath(path)
+		if err != nil {
+			return false
+		}
+		resolved = found
+	}
+
+	info, err := os.Stat(resolved)
 	if err != nil {
 		return false
 	}
 	if info.IsDir() {
 		// 目录只接受 macOS 的 .app.
-		return runtime.GOOS == "darwin" && isAppBundle(path)
+		return runtime.GOOS == "darwin" && isAppBundle(resolved)
 	}
 	return executable(info)
 }

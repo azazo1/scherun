@@ -69,24 +69,7 @@ func (s *Server) sendEvent(w http.ResponseWriter, flusher http.Flusher, includeW
 		// 数据库临时不可用时跳过本轮, 不让连接断开.
 		return true
 	}
-	snapshots := s.opts.Scheduler.Snapshots()
-	views := make([]taskView, 0, len(tasks))
-	for _, t := range tasks {
-		snap := snapshots[t.ID]
-		if snap.TaskID == 0 {
-			snap = scheduler.Snapshot{TaskID: t.ID, Status: scheduler.StatusIdle}
-		}
-		views = append(views, taskView{
-			Task:      t,
-			Status:    snap.Status,
-			PID:       snap.PID,
-			StartedAt: snap.StartedAt,
-			Restarts:  snap.Restarts,
-			Failures:  snap.Failures,
-		})
-	}
-
-	event := sseEvent{Tasks: views}
+	event := sseEvent{Tasks: s.buildTaskViews(tasks)}
 	if includeWarnings {
 		event.Warnings = s.opts.Scheduler.TakeWarnings()
 	}
