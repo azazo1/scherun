@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronRight, Eye, File, Folder, FolderUp, HardDrive, Home } from 'lucide-react'
 import { appApi } from '@/api/client'
 import type { FsListing } from '@/api/types'
+import { deriveFilter } from '@/lib/path-filter'
 import { cn } from '@/lib/utils'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
@@ -55,6 +56,31 @@ export function FilePicker({
     },
     [showHidden],
   )
+
+  // filter 是输入框里最后一段的文本, 用于就地过滤当前目录.
+  //
+  // 用户正在逐字输入路径时, 把它当成前缀过滤, 而不是每次都去请求目录,
+  // 这样输入过程中列表会实时收窄, 回车才真正跳转.
+  const { filter, isHidden: filterIsHidden } = useMemo(
+    () => deriveFilter(pathInput, listing?.path),
+    [pathInput, listing?.path],
+  )
+
+  // 最后一段以点开头时, 说明用户在找隐藏条目, 自动把隐藏项显示出来.
+  useEffect(() => {
+    if (filterIsHidden && !showHidden) {
+      setShowHidden(true)
+      void load(listing?.path, true)
+    }
+  }, [filterIsHidden, showHidden, listing?.path, load])
+
+  // visibleEntries 按最后一段过滤当前目录.
+  const visibleEntries = useMemo(() => {
+    const entries = listing?.entries ?? []
+    if (!filter) return entries
+    const needle = filter.toLowerCase()
+    return entries.filter((entry) => entry.name.toLowerCase().startsWith(needle))
+  }, [listing?.entries, filter])
 
   // submitPath 把输入框里的路径交给后端解析.
   //
@@ -198,11 +224,15 @@ export function FilePicker({
             <p className="p-4 text-sm text-[var(--content-muted)]">加载中...</p>
           ) : error ? (
             <p className="p-4 text-sm text-[var(--danger)]">{error}</p>
-          ) : listing && listing.entries.length === 0 ? (
-            <p className="p-4 text-sm text-[var(--content-faint)]">此目录为空</p>
+          ) : visibleEntries.length === 0 ? (
+            <p className="p-4 text-sm text-[var(--content-faint)]">
+              {listing && listing.entries.length > 0
+                ? `没有匹配 "${filter}" 的条目`
+                : '此目录为空'}
+            </p>
           ) : (
             <ul className="divide-y divide-[var(--border-subtle)]">
-              {listing?.entries.map((entry) => {
+              {visibleEntries.map((entry) => {
                 const selectable = canSelect(entry)
                 const isSelected = selected === entry.path
                 return (

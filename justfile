@@ -46,9 +46,10 @@ fmt:
 vet:
     go vet ./...
 
-# 运行测试.
+# 运行测试 (Go 与前端).
 test:
     go test ./...
+    cd web && node --test --experimental-strip-types "src/**/*.test.ts"
 
 # 带竞态检测运行测试.
 test-race:
