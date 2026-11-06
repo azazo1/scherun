@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/azazo1/scherun/internal/pathutil"
 )
 
 // Result 是解析结果, 字段与任务定义一一对应.
@@ -74,7 +76,7 @@ func Parse(input string) (Result, error) {
 		}
 		if isCdSegment(segment) {
 			if dir, ok := cdTarget(segment); ok {
-				result.WorkingDir = expandHome(dir)
+				result.WorkingDir = pathutil.ExpandHome(dir)
 				// cd 后面还有段落时, 后续段落才是主命令.
 				if index < len(segments)-1 {
 					continue
@@ -164,7 +166,7 @@ func parseSegment(tokens []token, result *Result) error {
 			if index+1 >= len(tokens) || tokens[index+1].kind != tokenWord {
 				return fmt.Errorf("重定向符 %s 后面缺少文件路径", item.text)
 			}
-			target := expandHome(tokens[index+1].text)
+			target := pathutil.ExpandHome(tokens[index+1].text)
 			if item.text == "2>" || item.text == "2>>" {
 				result.Stderr = target
 			} else {
@@ -183,7 +185,7 @@ func parseSegment(tokens []token, result *Result) error {
 			if index+1 >= len(tokens) || tokens[index+1].kind != tokenWord {
 				return fmt.Errorf("重定向符 < 后面缺少文件路径")
 			}
-			result.Stdin = expandHome(tokens[index+1].text)
+			result.Stdin = pathutil.ExpandHome(tokens[index+1].text)
 			index += 2
 		case "2>&1":
 			result.Warnings = append(result.Warnings,
@@ -214,7 +216,7 @@ func resolveProgram(result *Result) {
 
 	// 带路径分隔符的按路径处理, 只需要展开 ~.
 	if strings.ContainsRune(program, os.PathSeparator) || strings.Contains(program, "/") {
-		result.Program = expandHome(program)
+		result.Program = pathutil.ExpandHome(program)
 		result.Resolved = filepath.IsAbs(result.Program)
 		return
 	}
@@ -231,21 +233,6 @@ func resolveProgram(result *Result) {
 
 	result.Warnings = append(result.Warnings,
 		fmt.Sprintf("在 PATH 中找不到 %q, 请确认程序已安装或填写绝对路径", program))
-}
-
-// expandHome 把开头的 ~ 替换成用户家目录.
-func expandHome(path string) string {
-	if path != "~" && !strings.HasPrefix(path, "~/") {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if path == "~" {
-		return home
-	}
-	return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 }
 
 // splitSegments 按 && || ; | & 切分执行段, 同时返回分隔符序列.

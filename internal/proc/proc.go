@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/azazo1/scherun/internal/pathutil"
 	"github.com/azazo1/scherun/internal/task"
 )
 
@@ -125,7 +126,7 @@ func Start(spec Spec) (*Process, error) {
 		return nil, fmt.Errorf("程序路径为空")
 	}
 
-	program := spec.Program
+	program := pathutil.ExpandHome(spec.Program)
 	var args []string
 	// macOS 的 .app 是目录, 必须经 open 启动, 此时无法重定向标准流也无法获取真实退出码.
 	if runtime.GOOS == "darwin" && isAppBundle(program) {
@@ -201,7 +202,7 @@ func (p *Process) attachStdio() error {
 
 	if p.spec.Stdin != "" {
 		// 输入文件只读取, 不创建父目录: 目录不存在说明配置有误, 如实报错.
-		file, err := os.Open(resolvePath(base, p.spec.Stdin))
+		file, err := os.Open(pathutil.Resolve(base, p.spec.Stdin))
 		if err != nil {
 			return fmt.Errorf("打开标准输入文件失败: %w", err)
 		}
@@ -209,7 +210,7 @@ func (p *Process) attachStdio() error {
 		p.cmd.Stdin = file
 	}
 	if p.spec.Stdout != "" {
-		target := resolvePath(base, p.spec.Stdout)
+		target := pathutil.Resolve(base, p.spec.Stdout)
 		if err := ensureParentDir(target); err != nil {
 			return fmt.Errorf("创建标准输出目录失败: %w", err)
 		}
@@ -221,7 +222,7 @@ func (p *Process) attachStdio() error {
 		p.cmd.Stdout = file
 	}
 	if p.spec.Stderr != "" {
-		target := resolvePath(base, p.spec.Stderr)
+		target := pathutil.Resolve(base, p.spec.Stderr)
 		if err := ensureParentDir(target); err != nil {
 			return fmt.Errorf("创建标准错误目录失败: %w", err)
 		}
@@ -233,16 +234,6 @@ func (p *Process) attachStdio() error {
 		p.cmd.Stderr = file
 	}
 	return nil
-}
-
-// resolvePath 把相对路径按给定基准目录转成绝对路径.
-//
-// 绝对路径原样返回; 基准目录为空时保持相对路径不变.
-func resolvePath(base, path string) string {
-	if filepath.IsAbs(path) || base == "" {
-		return path
-	}
-	return filepath.Join(base, path)
 }
 
 // ensureParentDir 创建输出文件所在的父目录.
@@ -262,9 +253,9 @@ func ensureParentDir(path string) error {
 // 优先使用任务指定目录, 否则退回到程序所在目录, 让相对路径行为符合直觉.
 func workingDir(spec Spec) string {
 	if spec.WorkingDir != "" {
-		return spec.WorkingDir
+		return pathutil.ExpandHome(spec.WorkingDir)
 	}
-	parent := filepath.Dir(spec.Program)
+	parent := filepath.Dir(pathutil.ExpandHome(spec.Program))
 	if parent == "." || parent == "" {
 		return ""
 	}
@@ -290,7 +281,7 @@ func Runnable(path string) bool {
 		return false
 	}
 
-	resolved := path
+	resolved := pathutil.ExpandHome(path)
 	if !strings.ContainsAny(path, `/\`) {
 		found, err := exec.LookPath(path)
 		if err != nil {

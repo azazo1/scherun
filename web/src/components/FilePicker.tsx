@@ -190,7 +190,7 @@ export function FilePicker({
         <div className="flex gap-2">
           <Input
             value={pathInput}
-            placeholder="直接输入或粘贴绝对路径, 回车跳转"
+            placeholder="输入或粘贴路径 (支持 ~), 回车跳转"
             className="font-mono text-[12px]"
             onChange={(event) => setPathInput(event.target.value)}
             onKeyDown={(event) => {

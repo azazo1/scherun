@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/azazo1/scherun/internal/pathutil"
 )
 
 // fsEntry 是目录浏览返回的条目.
@@ -59,9 +61,11 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	// 默认不显示, 避免列表被配置与缓存目录淹没; 但 ~/.local/bin 这类
 	// 目录本身就在隐藏路径下, 因此必须允许显式打开.
 	showHidden := query.Get("show_hidden") == "1"
+	// 用户会在输入框里写 ~, 先展开再判断是否为绝对路径.
+	requested = pathutil.ExpandHome(requested)
 	requested = filepath.Clean(requested)
 	if !filepath.IsAbs(requested) {
-		writeProblem(w, http.StatusBadRequest, "路径必须是绝对路径")
+		writeProblem(w, http.StatusBadRequest, "路径必须是绝对路径, 也可以用 ~ 开头")
 		return
 	}
 
