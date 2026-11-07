@@ -111,6 +111,18 @@ type Task struct {
 	WorkingDir string            `json:"working_dir,omitempty"`
 	EnvVars    map[string]string `json:"env_vars,omitempty"`
 
+	// UseShellEnv 为真时任务继承从登录 shell 导入的环境变量.
+	//
+	// 默认开启: 从 Finder 启动的应用 PATH 只有系统默认值, 不继承的话
+	// homebrew 与用户目录下的命令都找不到.
+	UseShellEnv bool `json:"use_shell_env"`
+
+	// UseGlobalEnv 为真时任务继承设置里手工填写的全局环境变量.
+	//
+	// 与 UseShellEnv 分开控制: 想用全局注入但不要 shell 那套环境时,
+	// 可以只关掉前者. 任务自己的 EnvVars 始终生效, 且优先级最高.
+	UseGlobalEnv bool `json:"use_global_env"`
+
 	Trigger Trigger `json:"trigger"`
 	Enabled bool    `json:"enabled"`
 

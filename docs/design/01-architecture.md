@@ -8,6 +8,7 @@ internal/app           装配层: 按顺序初始化各组件, 统一退出
 internal/appdirs       目录解析, 支持环境变量覆盖
 internal/config        配置读写与版本迁移
 internal/logging       slog 多输出与轮转清理
+internal/envimport     从登录 shell 读取环境变量, 多层合并
 internal/store         SQLite 打开, 迁移, 任务 DAO
 internal/task          任务模型与触发方式
 internal/proc          子进程启动与终止 (平台相关)

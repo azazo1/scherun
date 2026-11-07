@@ -99,6 +99,14 @@ func Run(opts Options) error {
 	logger.Info("数据库已就绪", "path", dbPath)
 
 	sched := scheduler.New(db, logger)
+
+	// 环境变量: 启动时从登录 shell 读一次, 之后由用户手动刷新.
+	//
+	// 从 Finder 或 Dock 启动的 macOS 应用只继承 launchd 的最小环境,
+	// PATH 通常只有 /usr/bin:/bin:/usr/sbin:/sbin, 于是 adb, node 这些命令都找不到.
+	envState := newEnvState(&cfg, logger)
+	sched.SetEnvProvider(envState.Layers)
+
 	if err := sched.Start(); err != nil {
 		return fmt.Errorf("启动调度器失败: %w", err)
 	}
@@ -148,6 +156,9 @@ func Run(opts Options) error {
 		Logger:      logger,
 		OnExit:      func() { requestExit("界面退出") },
 		OnOpen:      func() { openInterface(logger, server, true) },
+		ReloadEnv:   envState.Refresh,
+		EnvStatus:   func() any { return envState.Status() },
+		TaskEnv:     envState.ForTask,
 	})
 	if err != nil {
 		return err

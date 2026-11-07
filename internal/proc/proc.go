@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/azazo1/scherun/internal/envimport"
 	"github.com/azazo1/scherun/internal/pathutil"
 	"github.com/azazo1/scherun/internal/task"
 )
@@ -26,11 +27,16 @@ type Spec struct {
 	Program    string
 	Args       []string
 	WorkingDir string
-	EnvVars    map[string]string
-	Stdin      string
-	Stdout     string
-	Stderr     string
-	NoConsole  bool
+	// EnvVars 是任务级环境变量, 优先级最高.
+	EnvVars map[string]string
+	// BaseEnv 是全局环境变量 (来自登录 shell 导入与设置里的全局注入).
+	//
+	// 任务级 EnvVars 会覆盖同名项; 为 nil 时任务只继承应用自身环境.
+	BaseEnv   map[string]string
+	Stdin     string
+	Stdout    string
+	Stderr    string
+	NoConsole bool
 }
 
 // SpecFromTask 由任务定义生成启动参数.
@@ -45,6 +51,12 @@ func SpecFromTask(t task.Task) Spec {
 		Stderr:     t.Stderr,
 		NoConsole:  t.NoConsole,
 	}
+}
+
+// WithBaseEnv 返回带上全局环境变量的副本.
+func (s Spec) WithBaseEnv(vars map[string]string) Spec {
+	s.BaseEnv = vars
+	return s
 }
 
 // Process 是一个已启动的子进程.
@@ -136,14 +148,25 @@ func Start(spec Spec) (*Process, error) {
 		args = spec.Args
 	}
 
+	// 环境变量分三层, 后者覆盖前者:
+	// 应用自身环境 < 全局环境 (登录 shell 导入 + 设置里的全局注入) < 任务级 env_vars.
+	//
+	// 全局环境这一层解决的是从 Finder 启动时 PATH 只有系统默认值的问题:
+	// 没有它, adb / node / ffmpeg 这些装在 homebrew 或用户目录下的命令都找不到.
+	base := envimport.ApplyToEnviron(os.Environ(), spec.BaseEnv)
+	env := envimport.ApplyToEnviron(base, spec.EnvVars)
+
+	// 只写了程序名时要沿合并后的 PATH 解析, 不能用 exec.Command 的默认行为:
+	// 它读的是进程自身的 PATH, 那份在 .app 启动时是残缺的, 于是明明配置了
+	// shell 环境也照样找不到 adb.
+	if !strings.ContainsAny(program, `/\`) {
+		if resolved, err := lookPathIn(program, env); err == nil {
+			program = resolved
+		}
+	}
+
 	cmd := exec.Command(program, args...)
 	cmd.Dir = workingDir(spec)
-
-	// 继承当前环境后再覆盖任务自定义变量.
-	env := os.Environ()
-	for key, value := range spec.EnvVars {
-		env = append(env, key+"="+value)
-	}
 	cmd.Env = env
 
 	process := &Process{
@@ -262,6 +285,38 @@ func workingDir(spec Spec) string {
 	return parent
 }
 
+// lookPathIn 按给定环境列表里的 PATH 查找可执行文件.
+//
+// exec.LookPath 只认进程自身的 PATH, 而这里的 PATH 可能来自登录 shell 导入,
+// 两者不是一回事, 所以自己按 env 里的值找.
+func lookPathIn(program string, env []string) (string, error) {
+	pathValue := ""
+	for _, entry := range env {
+		if key, value, ok := strings.Cut(entry, "="); ok && key == "PATH" {
+			pathValue = value
+		}
+	}
+	if pathValue == "" {
+		return "", exec.ErrNotFound
+	}
+
+	for _, dir := range filepath.SplitList(pathValue) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, program)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+			continue
+		}
+		return candidate, nil
+	}
+	return "", exec.ErrNotFound
+}
+
 // isAppBundle 判断路径是否是 macOS 的 .app 目录.
 func isAppBundle(path string) bool {
 	if !strings.HasSuffix(strings.ToLower(path), ".app") {
@@ -277,13 +332,30 @@ func isAppBundle(path string) bool {
 // exec.Command 会沿 PATH 查找, 这里也要先 LookPath, 否则会出现
 // "任务在跑但界面显示程序不可执行" 的矛盾.
 func Runnable(path string) bool {
+	return RunnableWithEnv(path, nil)
+}
+
+// RunnableWithEnv 在给定环境变量下判断程序是否可执行.
+//
+// 判断必须与 Start 一致: Start 会沿合并后的 PATH 查找, 这里也要用同一份 PATH,
+// 否则会出现 "任务在跑但界面显示程序不可执行" 的矛盾.
+// extraEnv 为 nil 时退回进程自身的 PATH.
+func RunnableWithEnv(path string, extraEnv map[string]string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
 	}
 
 	resolved := pathutil.ExpandHome(path)
 	if !strings.ContainsAny(path, `/\`) {
-		found, err := exec.LookPath(path)
+		var (
+			found string
+			err   error
+		)
+		if extraEnv == nil {
+			found, err = exec.LookPath(path)
+		} else {
+			found, err = lookPathIn(path, envimport.ApplyToEnviron(os.Environ(), extraEnv))
+		}
 		if err != nil {
 			return false
 		}

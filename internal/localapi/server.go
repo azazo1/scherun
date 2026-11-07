@@ -17,6 +17,7 @@ import (
 	"github.com/azazo1/scherun/internal/config"
 	"github.com/azazo1/scherun/internal/scheduler"
 	"github.com/azazo1/scherun/internal/store"
+	"github.com/azazo1/scherun/internal/task"
 	"github.com/azazo1/scherun/internal/webui"
 )
 
@@ -46,6 +47,12 @@ type Options struct {
 	OnExit func()
 	// OnOpen 在第二实例请求聚焦时调用.
 	OnOpen func()
+	// ReloadEnv 重新从登录 shell 导入环境变量, 供设置保存与手动刷新调用.
+	ReloadEnv func()
+	// EnvStatus 返回环境变量导入状态, 供设置界面展示.
+	EnvStatus func() any
+	// TaskEnv 返回某个任务能拿到的环境变量, 用于判定程序是否可执行.
+	TaskEnv func(task.Task) map[string]string
 }
 
 // Server 是本地 HTTP 服务.
@@ -218,6 +225,8 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/api/tasks/reorder", s.requireAuth(s.handleReorder))
 	mux.HandleFunc("/api/warnings", s.requireAuth(s.handleWarnings))
 	mux.HandleFunc("/api/config", s.requireAuth(s.handleConfig))
+	mux.HandleFunc("/api/env/status", s.requireAuth(s.handleEnvStatus))
+	mux.HandleFunc("/api/env/refresh", s.requireAuth(s.handleEnvRefresh))
 	mux.HandleFunc("/api/fs/list", s.requireAuth(s.handleFSList))
 	mux.HandleFunc("/api/parse-command", s.requireAuth(s.handleParseCommand))
 	mux.HandleFunc("/api/events", s.requireAuth(s.handleEvents))

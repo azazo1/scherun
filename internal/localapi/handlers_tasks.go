@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/azazo1/scherun/internal/config"
+	"github.com/azazo1/scherun/internal/envimport"
 	"github.com/azazo1/scherun/internal/scheduler"
 	"github.com/azazo1/scherun/internal/store"
 	"github.com/azazo1/scherun/internal/task"
@@ -69,14 +70,41 @@ func (s *Server) listTasks(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, s.buildTaskViews(tasks))
 }
 
+// taskPayload 是任务保存请求体.
+//
+// 内嵌 task.Task 后又声明了两个指针字段, 用来区分"没传"和"显式传了 false":
+// 直接解码到 bool 时两者都是 false, 会让新建任务默认丢掉环境继承.
+// JSON 解码时外层同名字段优先, 因此这两个指针能正确覆盖内嵌结构里的值.
+type taskPayload struct {
+	task.Task
+	UseShellEnv  *bool `json:"use_shell_env,omitempty"`
+	UseGlobalEnv *bool `json:"use_global_env,omitempty"`
+}
+
+// toTask 把请求体还原成任务定义, 未提供的继承开关按默认开启处理.
+func (p taskPayload) toTask() task.Task {
+	t := p.Task
+	if p.UseShellEnv != nil {
+		t.UseShellEnv = *p.UseShellEnv
+	} else {
+		t.UseShellEnv = true
+	}
+	if p.UseGlobalEnv != nil {
+		t.UseGlobalEnv = *p.UseGlobalEnv
+	} else {
+		t.UseGlobalEnv = true
+	}
+	return t
+}
+
 // saveTask 新建或更新任务.
 func (s *Server) saveTask(w http.ResponseWriter, r *http.Request) {
-	var payload task.Task
+	var payload taskPayload
 	if err := decodeJSON(r, &payload); err != nil {
 		writeProblem(w, http.StatusBadRequest, "请求体格式不正确: "+err.Error())
 		return
 	}
-	id, err := s.opts.Scheduler.SaveTask(payload)
+	id, err := s.opts.Scheduler.SaveTask(payload.toTask())
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, err.Error())
 		return
@@ -197,10 +225,30 @@ func (s *Server) handleWarnings(w http.ResponseWriter, r *http.Request) {
 
 // configView 是配置的对外视图.
 type configView struct {
-	QuietLaunch      bool   `json:"quiet_launch"`
-	LogRetentionDays int    `json:"log_retention_days"`
-	LocalBind        string `json:"local_bind"`
-	Version          int    `json:"version"`
+	QuietLaunch      bool              `json:"quiet_launch"`
+	LogRetentionDays int               `json:"log_retention_days"`
+	LocalBind        string            `json:"local_bind"`
+	EnvImportEnabled bool              `json:"env_import_enabled"`
+	EnvImportCommand string            `json:"env_import_command"`
+	EnvVars          map[string]string `json:"env_vars"`
+	Version          int               `json:"version"`
+}
+
+// buildConfigView 把配置转成对外视图.
+func buildConfigView(cfg *config.Config) configView {
+	vars := cfg.EnvVars
+	if vars == nil {
+		vars = map[string]string{}
+	}
+	return configView{
+		QuietLaunch:      cfg.QuietLaunch,
+		LogRetentionDays: cfg.LogRetentionDays,
+		LocalBind:        cfg.LocalBind,
+		EnvImportEnabled: cfg.EnvImportEnabled,
+		EnvImportCommand: cfg.EnvImportCommand,
+		EnvVars:          vars,
+		Version:          cfg.Version,
+	}
 }
 
 // handleConfig 读取或保存配置.
@@ -212,36 +260,69 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, configView{
-			QuietLaunch:      cfg.QuietLaunch,
-			LogRetentionDays: cfg.LogRetentionDays,
-			LocalBind:        cfg.LocalBind,
-			Version:          cfg.Version,
-		})
+		writeJSON(w, http.StatusOK, buildConfigView(cfg))
 	case http.MethodPut, http.MethodPost:
 		var payload configView
 		if err := decodeJSON(r, &payload); err != nil {
 			writeProblem(w, http.StatusBadRequest, "请求体格式不正确: "+err.Error())
 			return
 		}
+		// 导入命令先做存在性检查, 让用户在保存时就得到反馈, 而不是等下次启动才发现填错.
+		if payload.EnvImportEnabled {
+			if err := envimport.ValidateCommand(envimport.SplitCommand(payload.EnvImportCommand)); err != nil {
+				writeProblem(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		next := config.Config{
 			QuietLaunch:      payload.QuietLaunch,
 			LogRetentionDays: payload.LogRetentionDays,
 			LocalBind:        cfg.LocalBind,
+			EnvImportEnabled: payload.EnvImportEnabled,
+			EnvImportCommand: payload.EnvImportCommand,
+			EnvVars:          payload.EnvVars,
 		}
 		if err := cfg.Update(next); err != nil {
 			writeProblem(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, configView{
-			QuietLaunch:      cfg.QuietLaunch,
-			LogRetentionDays: cfg.LogRetentionDays,
-			LocalBind:        cfg.LocalBind,
-			Version:          cfg.Version,
-		})
+		// 导入相关的设置变了就立刻重新导入, 不用等重启.
+		if s.opts.ReloadEnv != nil {
+			go s.opts.ReloadEnv()
+		}
+		writeJSON(w, http.StatusOK, buildConfigView(cfg))
 	default:
 		writeProblem(w, http.StatusMethodNotAllowed, "只支持 GET 与 PUT")
 	}
+}
+
+// handleEnvStatus 返回登录 shell 环境变量的导入状态.
+func (s *Server) handleEnvStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeProblem(w, http.StatusMethodNotAllowed, "只支持 GET")
+		return
+	}
+	if s.opts.EnvStatus == nil {
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.EnvStatus())
+}
+
+// handleEnvRefresh 重新执行导入命令.
+func (s *Server) handleEnvRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeProblem(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	if s.opts.ReloadEnv != nil {
+		s.opts.ReloadEnv()
+	}
+	if s.opts.EnvStatus == nil {
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.EnvStatus())
 }
 
 // handleExit 处理界面发起的退出.

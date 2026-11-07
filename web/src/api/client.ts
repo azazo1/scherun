@@ -2,6 +2,7 @@
 
 import type {
   AppConfig,
+  EnvStatus,
   EventsPayload,
   FsListing,
   Health,
@@ -109,6 +110,13 @@ export const appApi = {
       method: 'POST',
       body: JSON.stringify({ command }),
     }),
+
+  /** 读取登录 shell 环境变量的导入状态. */
+  envStatus: () => request<EnvStatus>('/api/env/status'),
+
+  /** 重新执行导入命令. */
+  refreshEnv: () =>
+    request<EnvStatus>('/api/env/refresh', { method: 'POST' }),
 
   listDir: (path?: string, showHidden?: boolean) => {
     const params = new URLSearchParams()

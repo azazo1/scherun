@@ -31,6 +31,10 @@ export interface Task {
   stderr?: string
   working_dir?: string
   env_vars?: Record<string, string>
+  /** 是否继承从登录 shell 导入的环境变量. */
+  use_shell_env: boolean
+  /** 是否继承设置里填写的全局环境变量. */
+  use_global_env: boolean
   trigger: Trigger
   enabled: boolean
   no_console: boolean
@@ -80,7 +84,24 @@ export interface AppConfig {
   quiet_launch: boolean
   log_retention_days: number
   local_bind: string
+  /** 是否在启动时从登录 shell 导入环境变量. */
+  env_import_enabled: boolean
+  /** 导入命令, 留空时按 $SHELL 自动推断. */
+  env_import_command: string
+  /** 全局注入的环境变量, 任务可选择是否继承. */
+  env_vars: Record<string, string>
   version: number
+}
+
+/** 登录 shell 环境变量的导入状态. */
+export interface EnvStatus {
+  enabled: boolean
+  command: string
+  default_command: string
+  var_count: number
+  path_count: number
+  last_error?: string
+  loaded_at?: string
 }
 
 /** 健康检查响应. */

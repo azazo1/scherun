@@ -17,7 +17,7 @@ import (
 )
 
 // CurrentVersion 是当前配置文件结构版本.
-const CurrentVersion = 1
+const CurrentVersion = 2
 
 // DefaultBind 是本地 HTTP 服务的默认监听地址.
 const DefaultBind = "127.0.0.1:20008"
@@ -39,6 +39,18 @@ type Config struct {
 	// LocalBind 是本地 HTTP 监听地址.
 	LocalBind string `toml:"local_bind"`
 
+	// EnvImportCommand 是从登录 shell 读取环境变量的命令, 留空时按 $SHELL 自动推断.
+	//
+	// 存成字符串是为了让用户像在终端里那样填写整条命令, 解析用
+	// envimport.SplitCommand 的简单切分, 不做变量展开.
+	EnvImportCommand string `toml:"env_import_command"`
+
+	// EnvImportEnabled 为真时启动时从登录 shell 导入环境变量.
+	EnvImportEnabled bool `toml:"env_import_enabled"`
+
+	// EnvVars 是全局注入的环境变量, 覆盖导入的值, 任务级 env_vars 再覆盖它.
+	EnvVars map[string]string `toml:"env_vars"`
+
 	// path 记录配置来源文件, 不参与序列化.
 	path string
 }
@@ -50,6 +62,11 @@ func Default() Config {
 		QuietLaunch:      false,
 		LogRetentionDays: DefaultLogRetentionDays,
 		LocalBind:        DefaultBind,
+		// 默认开启: 从 Finder 启动的 macOS 应用只继承 launchd 的最小环境,
+		// 不导入的话 homebrew 与 SDK 里的命令都找不到.
+		EnvImportEnabled: true,
+		EnvImportCommand: "",
+		EnvVars:          map[string]string{},
 	}
 }
 
@@ -137,6 +154,20 @@ func Migrate(raw map[string]any) (Config, error) {
 		version = 1
 	}
 
+	// v1 -> v2: 新增环境变量导入与全局注入.
+	//
+	// 老配置没有这两个字段, 补上默认值即可; 导入默认开启,
+	// 因为不开启的话从 Finder 启动的应用连 homebrew 里的命令都找不到.
+	if version < 2 {
+		if _, ok := raw["env_import_enabled"]; !ok {
+			raw["env_import_enabled"] = true
+		}
+		if _, ok := raw["env_vars"]; !ok {
+			raw["env_vars"] = map[string]any{}
+		}
+		version = 2
+	}
+
 	// 用 TOML 往返把 map 解析成结构体, 未出现的字段保留默认值.
 	buf, err := toml.Marshal(raw)
 	if err != nil {
@@ -159,6 +190,21 @@ func (c *Config) normalize() {
 	if strings.TrimSpace(c.LocalBind) == "" {
 		c.LocalBind = DefaultBind
 	}
+	// 空 map 会让 TOML 输出成空表, 这里统一成非 nil, 保证界面上是 {} 而不是 null.
+	if c.EnvVars == nil {
+		c.EnvVars = map[string]string{}
+	}
+	// 变量名两端的空白一定是误输入, 清掉; 值为空是合法的 (表示显式置空).
+	cleaned := make(map[string]string, len(c.EnvVars))
+	for key, value := range c.EnvVars {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		cleaned[trimmed] = value
+	}
+	c.EnvVars = cleaned
+	c.EnvImportCommand = strings.TrimSpace(c.EnvImportCommand)
 }
 
 // Validate 校验配置取值.
@@ -217,6 +263,9 @@ func (c *Config) Update(next Config) error {
 	if strings.TrimSpace(next.LocalBind) != "" {
 		c.LocalBind = next.LocalBind
 	}
+	c.EnvImportEnabled = next.EnvImportEnabled
+	c.EnvImportCommand = next.EnvImportCommand
+	c.EnvVars = next.EnvVars
 	c.normalize()
 	if err := c.Validate(); err != nil {
 		return err

@@ -39,6 +39,10 @@ function emptyForm(): Partial<Task> {
     stdout: '',
     stderr: '',
     env_vars: {},
+    // 默认继承全局与 shell 环境: 从 Finder 启动的应用 PATH 只有系统默认值,
+    // 不继承的话 homebrew 与 SDK 里的命令都找不到.
+    use_shell_env: true,
+    use_global_env: true,
   }
 }
 
@@ -384,9 +388,43 @@ export function TaskEditor({ open, task, onClose, onSave }: TaskEditorProps) {
 
         {/* 环境变量. */}
         <section className="space-y-3">
+          {/* 继承开关: 决定这个任务能拿到哪些外部环境. */}
+          <div className="space-y-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[13px] text-[var(--content)]">继承登录 shell 环境</p>
+                <p className="mt-0.5 text-xs text-[var(--content-faint)]">
+                  拿到 shell 里的 PATH 等变量, 让 adb, node 这类命令可直接调用
+                </p>
+              </div>
+              <Switch
+                checked={form.use_shell_env ?? true}
+                onCheckedChange={(checked) =>
+                  setForm((current) => ({ ...current, use_shell_env: checked }))
+                }
+                label="继承登录 shell 环境"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-2">
+              <div>
+                <p className="text-[13px] text-[var(--content)]">继承全局环境变量</p>
+                <p className="mt-0.5 text-xs text-[var(--content-faint)]">
+                  使用设置里填写的全局变量, 可用设置页统一管理
+                </p>
+              </div>
+              <Switch
+                checked={form.use_global_env ?? true}
+                onCheckedChange={(checked) =>
+                  setForm((current) => ({ ...current, use_global_env: checked }))
+                }
+                label="继承全局环境变量"
+              />
+            </div>
+          </div>
+
           <div className="flex items-center justify-between">
             <h3 className="text-[13px] font-semibold uppercase tracking-wide text-[var(--content-faint)]">
-              环境变量
+              任务环境变量
             </h3>
             <Button
               variant="ghost"

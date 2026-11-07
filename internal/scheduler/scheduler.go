@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/azazo1/scherun/internal/envimport"
 	"github.com/azazo1/scherun/internal/proc"
 	"github.com/azazo1/scherun/internal/store"
 	"github.com/azazo1/scherun/internal/task"
@@ -127,6 +128,12 @@ type Scheduler struct {
 	db     *store.DB
 	logger *slog.Logger
 
+	// env 提供任务进程的基础环境变量, 可为 nil.
+	//
+	// 分两层返回: shellEnv 来自登录 shell 导入, globalEnv 来自设置里的全局注入.
+	// 任务按自己的 UseShellEnv / UseGlobalEnv 开关决定要哪一层, 两者独立.
+	env func() (shellEnv, globalEnv map[string]string)
+
 	mu       sync.Mutex
 	states   map[int64]*taskState
 	warnings []Warning
@@ -174,6 +181,26 @@ func New(db *store.DB, logger *slog.Logger) *Scheduler {
 		cancel:  cancel,
 		stopped: make(chan struct{}),
 	}
+}
+
+// SetEnvProvider 设置任务进程的环境变量来源.
+//
+// 传入的函数会在每次启动任务时调用, 因此可以在设置变更后立刻生效.
+// 两个返回值分别是登录 shell 导入的环境与设置里的全局变量, 由任务按自己的开关选择.
+// 传 nil 表示不注入额外变量, 任务继承应用自身环境.
+func (s *Scheduler) SetEnvProvider(provider func() (shellEnv, globalEnv map[string]string)) {
+	s.env = provider
+}
+
+// envForTask 返回某个任务本次启动要注入的环境变量.
+//
+// 任务级 env_vars 不在这里合并, 由 proc 层按最高优先级覆盖.
+func (s *Scheduler) envForTask(t task.Task) map[string]string {
+	if s.env == nil {
+		return nil
+	}
+	shellEnv, globalEnv := s.env()
+	return envimport.SelectLayers(shellEnv, globalEnv, t.UseShellEnv, t.UseGlobalEnv)
 }
 
 // Start 加载全部任务并启动调度.
@@ -278,7 +305,7 @@ func (s *Scheduler) runTask(ctx context.Context, initial task.Task, g *guard) {
 		if !latest.Enabled {
 			return fmt.Errorf("任务已停用")
 		}
-		process, err := proc.Start(proc.SpecFromTask(latest))
+		process, err := proc.Start(proc.SpecFromTask(latest).WithBaseEnv(s.envForTask(latest)))
 		if err != nil {
 			state.mu.Lock()
 			state.failures++

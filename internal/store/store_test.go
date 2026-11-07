@@ -24,6 +24,7 @@ func newTestDB(t *testing.T) *DB {
 func TestMigrateIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 
+	var first int
 	for attempt := 0; attempt < 2; attempt++ {
 		db, err := Open(path)
 		if err != nil {
@@ -35,8 +36,18 @@ func TestMigrateIdempotent(t *testing.T) {
 			t.Fatalf("统计迁移记录失败: %v", err)
 		}
 		db.Close()
-		if count != 1 {
-			t.Fatalf("迁移记录应为 1 条, 实际 %d 条", count)
+
+		// 不断言固定条数: 每加一个迁移文件都会变, 那样断言只会逼着每次改测试.
+		// 真正要保证的是重复打开不会重复执行, 所以第二次必须与第一次相同.
+		if attempt == 0 {
+			first = count
+			if first == 0 {
+				t.Fatal("首次打开应当至少执行一个迁移")
+			}
+			continue
+		}
+		if count != first {
+			t.Fatalf("重复打开后迁移记录从 %d 变成 %d, 说明迁移被重复执行", first, count)
 		}
 	}
 }
@@ -207,5 +218,64 @@ func TestSetLastRunAndEnabled(t *testing.T) {
 	got, _ = db.GetTask(id)
 	if got.Enabled {
 		t.Fatal("任务应处于停用状态")
+	}
+}
+
+// TestTaskEnvInheritRoundTrip 验证两个环境继承开关能正确往返.
+//
+// 这两个开关分开控制 shell 注入与全局注入, 存错或读错会让任务拿到不该有的环境.
+func TestTaskEnvInheritRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+
+	cases := []struct {
+		name         string
+		useShellEnv  bool
+		useGlobalEnv bool
+	}{
+		{"都继承", true, true},
+		{"都不继承", false, false},
+		{"只要 shell", true, false},
+		{"只要全局", false, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id, err := db.SaveTask(task.Task{
+				Name:         c.name,
+				Program:      "/bin/echo",
+				Trigger:      task.Trigger{Kind: task.TriggerManual},
+				Enabled:      true,
+				UseShellEnv:  c.useShellEnv,
+				UseGlobalEnv: c.useGlobalEnv,
+			})
+			if err != nil {
+				t.Fatalf("创建任务失败: %v", err)
+			}
+
+			got, err := db.GetTask(id)
+			if err != nil {
+				t.Fatalf("读取任务失败: %v", err)
+			}
+			if got.UseShellEnv != c.useShellEnv {
+				t.Errorf("UseShellEnv = %v, 期望 %v", got.UseShellEnv, c.useShellEnv)
+			}
+			if got.UseGlobalEnv != c.useGlobalEnv {
+				t.Errorf("UseGlobalEnv = %v, 期望 %v", got.UseGlobalEnv, c.useGlobalEnv)
+			}
+
+			// 更新路径也要能改回来.
+			got.UseShellEnv = !c.useShellEnv
+			got.UseGlobalEnv = !c.useGlobalEnv
+			if _, err := db.SaveTask(got); err != nil {
+				t.Fatalf("更新任务失败: %v", err)
+			}
+			updated, err := db.GetTask(id)
+			if err != nil {
+				t.Fatalf("重新读取失败: %v", err)
+			}
+			if updated.UseShellEnv == c.useShellEnv || updated.UseGlobalEnv == c.useGlobalEnv {
+				t.Errorf("更新后开关未生效: %+v", updated)
+			}
+		})
 	}
 }

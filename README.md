@@ -60,14 +60,41 @@ just vet        # 静态检查
 ## 配置
 
 ```toml
-version = 1
+version = 2
 quiet_launch = false          # 启动时不自动打开浏览器
 log_retention_days = 5        # 日志保留天数, 最小 1
 local_bind = "127.0.0.1:20008"  # 本地监听地址
+env_import_enabled = true     # 启动时从登录 shell 导入环境变量
+env_import_command = ""       # 导入命令, 留空时按 $SHELL 推断
+
+[env_vars]                    # 全局环境变量, 任务可选择是否继承
 ```
 
 配置文件带 `version` 字段. 旧版本配置会在启动时自动补齐缺失字段并回写;
 文件损坏时会备份为 `config.toml.broken` 并用默认值继续运行.
+
+## 环境变量
+
+从 Finder 或 Dock 启动的 macOS 应用只继承 launchd 的最小环境,
+`PATH` 通常只有 `/usr/bin:/bin:/usr/sbin:/sbin`, 于是 `adb`, `node`, `ffmpeg`
+这类装在 homebrew 或用户目录下的命令全都找不到.
+
+因此 scherun 启动时会跑一次登录 shell 读取它的环境:
+
+- 默认命令按 `$SHELL` 推断, 例如 `/usr/local/bin/fish -l -c "env -0"`.
+- 可以在设置页改成别的命令, 例如需要交互式初始化时用 `fish -l -i -c "env -0"`.
+- 读取结果在启动时缓存一次, 设置页提供"立即重新导入", 改完 shell 配置不用重启.
+
+环境变量按三层合并, 后者覆盖前者:
+
+| 层 | 来源 | 任务能否关闭 |
+| --- | --- | --- |
+| 应用自身环境 | 启动 scherun 的进程 | 不能 |
+| 登录 shell 导入 | 上面的导入命令 | 能 (`use_shell_env`) |
+| 全局变量 | 设置页填写 | 能 (`use_global_env`) |
+| 任务变量 | 任务编辑页填写 | 始终生效, 优先级最高 |
+
+两个继承开关是独立的: 想用全局变量但不要 shell 那套环境时, 可以只关掉前者.
 
 ## 安全模型
 

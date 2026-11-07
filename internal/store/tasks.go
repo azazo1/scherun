@@ -15,7 +15,7 @@ var ErrTaskNotFound = errors.New("任务不存在")
 // taskColumns 是任务查询使用的列顺序, 与 scanTask 一一对应.
 const taskColumns = `id, sort_order, name, program, args, stdin, stdout, stderr,
 	working_dir, env_vars, trigger_tag, trigger_value, enabled, no_console,
-	last_exit_code, last_run_at, created_at, updated_at`
+	use_shell_env, use_global_env, last_exit_code, last_run_at, created_at, updated_at`
 
 // ListTasks 返回全部任务, 按 sort_order 与 id 升序.
 func (d *DB) ListTasks() ([]task.Task, error) {
@@ -67,12 +67,14 @@ func (d *DB) SaveTask(t task.Task) (int64, error) {
 		}
 		res, err := d.conn.Exec(`INSERT INTO tasks
 			(sort_order, name, program, args, stdin, stdout, stderr, working_dir, env_vars,
-			 trigger_tag, trigger_value, enabled, no_console, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 trigger_tag, trigger_value, enabled, no_console, use_shell_env, use_global_env,
+			 created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			nextOrder, t.Name, t.Program, task.EncodeArgs(t.Args),
 			nullString(t.Stdin), nullString(t.Stdout), nullString(t.Stderr),
 			nullString(t.WorkingDir), task.EncodeEnv(t.EnvVars),
 			string(t.Trigger.Kind), triggerValue, boolToInt(t.Enabled), boolToInt(t.NoConsole),
+			boolToInt(t.UseShellEnv), boolToInt(t.UseGlobalEnv),
 			formatTime(now), formatTime(now),
 		)
 		if err != nil {
@@ -89,12 +91,13 @@ func (d *DB) SaveTask(t task.Task) (int64, error) {
 	res, err := d.conn.Exec(`UPDATE tasks SET
 		name = ?, program = ?, args = ?, stdin = ?, stdout = ?, stderr = ?,
 		working_dir = ?, env_vars = ?, trigger_tag = ?, trigger_value = ?,
-		no_console = ?, updated_at = ?
+		no_console = ?, use_shell_env = ?, use_global_env = ?, updated_at = ?
 		WHERE id = ?`,
 		t.Name, t.Program, task.EncodeArgs(t.Args),
 		nullString(t.Stdin), nullString(t.Stdout), nullString(t.Stderr),
 		nullString(t.WorkingDir), task.EncodeEnv(t.EnvVars),
 		string(t.Trigger.Kind), triggerValue, boolToInt(t.NoConsole),
+		boolToInt(t.UseShellEnv), boolToInt(t.UseGlobalEnv),
 		formatTime(now), t.ID,
 	)
 	if err != nil {
@@ -211,6 +214,8 @@ func scanTask(s rowScanner) (task.Task, error) {
 		triggerValue sql.NullString
 		enabled      int
 		noConsole    int
+		useShellEnv  int
+		useGlobalEnv int
 		lastExitCode sql.NullInt64
 		lastRunAt    sql.NullString
 		createdAt    string
@@ -220,6 +225,7 @@ func scanTask(s rowScanner) (task.Task, error) {
 		&t.ID, &t.SortOrder, &t.Name, &t.Program, &argsRaw,
 		&stdin, &stdout, &stderr, &workingDir, &envRaw,
 		&triggerTag, &triggerValue, &enabled, &noConsole,
+		&useShellEnv, &useGlobalEnv,
 		&lastExitCode, &lastRunAt, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -234,6 +240,8 @@ func scanTask(s rowScanner) (task.Task, error) {
 	t.WorkingDir = workingDir.String
 	t.Enabled = enabled != 0
 	t.NoConsole = noConsole != 0
+	t.UseShellEnv = useShellEnv != 0
+	t.UseGlobalEnv = useGlobalEnv != 0
 	t.Trigger = decodeTrigger(triggerTag, triggerValue)
 
 	if lastExitCode.Valid {

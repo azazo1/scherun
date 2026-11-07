@@ -32,6 +32,8 @@ func (s *Server) buildTaskViews(tasks []task.Task) []taskView {
 		if !ok || snap.TaskID == 0 {
 			snap = scheduler.Snapshot{TaskID: t.ID, Status: scheduler.StatusIdle}
 		}
+		// 可执行判定要用任务实际能拿到的环境: 只写了程序名时,
+		// 程序要靠 PATH 找, 而 PATH 可能来自 shell 导入或全局变量.
 		views = append(views, taskView{
 			Task:      t,
 			Status:    snap.Status,
@@ -39,8 +41,16 @@ func (s *Server) buildTaskViews(tasks []task.Task) []taskView {
 			StartedAt: snap.StartedAt,
 			Restarts:  snap.Restarts,
 			Failures:  snap.Failures,
-			Runnable:  proc.Runnable(t.Program),
+			Runnable:  proc.RunnableWithEnv(t.Program, s.envForTask(t)),
 		})
 	}
 	return views
+}
+
+// envForTask 返回任务能拿到的环境变量, 未配置时返回 nil (退回进程自身环境).
+func (s *Server) envForTask(t task.Task) map[string]string {
+	if s.opts.TaskEnv == nil {
+		return nil
+	}
+	return s.opts.TaskEnv(t)
 }
