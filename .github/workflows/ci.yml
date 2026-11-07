@@ -207,8 +207,22 @@ jobs:
 
           $target = Join-Path $env:RUNNER_TEMP 'installer-check'
           $log = Join-Path $env:RUNNER_TEMP 'installer-check.log'
-          & $installer.FullName '/SP-' '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/NOICONS' "/DIR=$target" "/LOG=$log"
-          if ($LASTEXITCODE -ne 0) { throw "安装器退出码: $LASTEXITCODE, 日志: $log" }
+
+          # 用 Start-Process -Wait 而不是 & 调用: 安装器是 GUI 子系统程序,
+          # 用 & 启动不会等待, $LASTEXITCODE 也是空的, 会立刻判定失败.
+          $proc = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList @(
+            '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS',
+            "/DIR=$target", "/LOG=$log"
+          )
+          if ($proc.ExitCode -ne 0) { throw "安装器退出码: $($proc.ExitCode), 日志: $log" }
+
+          # Inno Setup 的外层进程可能先于实际安装结束, 这里等载荷真正落地.
+          $uninstaller = Join-Path $target 'unins000.exe'
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+            if ((Get-Date) -gt $deadline) { throw "安装超时, 60 秒内没有装出卸载器; 日志: $log" }
+            Start-Sleep -Milliseconds 500
+          }
 
           foreach ($name in @('scherun.exe', 'scherun.ico')) {
             $installed = Join-Path $target $name
@@ -234,12 +248,10 @@ jobs:
             throw ("载荷架构不符: 读到 {0:x}, 期望 {1:x} ({2})" -f $machine, $expected, '${{ matrix.arch }}')
           }
 
-          $uninstaller = Join-Path $target 'unins000.exe'
-          if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
-            throw "安装目录缺少卸载器: $uninstaller"
-          }
-          & $uninstaller '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART'
-          if ($LASTEXITCODE -ne 0) { throw "卸载器退出码: $LASTEXITCODE" }
+          $unproc = Start-Process -FilePath $uninstaller -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          )
+          if ($unproc.ExitCode -ne 0) { throw "卸载器退出码: $($unproc.ExitCode)" }
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
