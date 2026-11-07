@@ -12,18 +12,10 @@ import shutil
 import subprocess
 import sys
 
+from output_encoding import configure_output_encoding
 
-def configure_output_encoding():
-    """把 stdout 与 stderr 切到 UTF-8.
-
-    Windows 控制台默认是本地代码页, 输出中文会抛 UnicodeEncodeError,
-    而 GitHub Actions 日志按 UTF-8 解码, 所以统一按 UTF-8 输出.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError, OSError):
-            pass
+# 编码配置统一由 output_encoding.py 提供, 这里只做转出, 让已有调用点保持原样:
+# 项目自有脚本也用同一个实现, 两处各写一份迟早会漂移.
 
 
 def die(message):
