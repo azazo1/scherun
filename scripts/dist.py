@@ -352,6 +352,10 @@ def package_windows(staging, binary, display_version, archive_version, target_ar
 
     Inno Setup 只在 Windows 上有 (或通过 wine), 这一步只在 windows runner 上执行.
     """
+    # 载荷必须是目标架构: 安装器本身的那层外壳不反映载荷, 见下方的说明.
+    rc.check_binary_format(binary, "windows")
+    rc.check_binary_arch(binary, "windows", target_arch)
+
     compiler = find_inno_setup()
     setup_path = os.path.join(DIST, f"{PROJECT_NAME}-{archive_version}-windows-{target_arch}-setup.exe")
     if os.path.exists(setup_path):
@@ -376,9 +380,12 @@ def package_windows(staging, binary, display_version, archive_version, target_ar
     if not os.path.isfile(setup_path):
         rc.die(f"安装器没有生成: {setup_path}")
 
-    # 校验: PE 文件头 + 架构, 与 Linux/macOS 的产物检查对齐.
+    # 安装器只校验文件格式, 不校验架构.
+    #
+    # Inno Setup 生成的 setup.exe 是固定的 32 位可执行外壳 (PE Machine 0x14c),
+    # 它的架构与载荷无关: 同一份外壳既装 x86_64 载荷也装 aarch64 载荷.
+    # 载荷架构由上面 binary 的文件格式与架构检查确认, 装出来的结果由 CI 的静默安装步骤核对.
     rc.check_binary_format(setup_path, "windows")
-    rc.check_binary_arch(setup_path, "windows", target_arch)
     print(f"已生成 {setup_path}")
 
 

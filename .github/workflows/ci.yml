@@ -217,6 +217,23 @@ jobs:
             }
           }
 
+          # 安装器自身是 32 位外壳, 架构只能从装出来的载荷上核对.
+          $expected = @{ 'x86_64' = 0x8664; 'aarch64' = 0xAA64 }['${{ matrix.arch }}']
+          $exe = Join-Path $target 'scherun.exe'
+          $stream = [System.IO.File]::OpenRead($exe)
+          try {
+            $reader = New-Object System.IO.BinaryReader($stream)
+            $stream.Position = 0x3C
+            $peOffset = $reader.ReadInt32()
+            $stream.Position = $peOffset + 4
+            $machine = $reader.ReadUInt16()
+          } finally {
+            $stream.Dispose()
+          }
+          if ($machine -ne $expected) {
+            throw ("载荷架构不符: 读到 {0:x}, 期望 {1:x} ({2})" -f $machine, $expected, '${{ matrix.arch }}')
+          }
+
           $uninstaller = Join-Path $target 'unins000.exe'
           if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
             throw "安装目录缺少卸载器: $uninstaller"
