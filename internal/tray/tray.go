@@ -3,8 +3,11 @@
 // Package tray 提供系统托盘图标与菜单.
 //
 // 交互约定:
-//   - 左键单击: 打开或聚焦管理界面.
-//   - 右键: 弹出菜单, 首项是禁用的应用名与版本, 末项是可用的退出.
+//   - 左键与右键单击都弹出菜单.
+//   - 菜单首项是禁用的应用名与版本, 其次是运行概况与"打开主页面", 末项是退出.
+//
+// 不在图标上直接绑定点击动作: fyne.io/systray 的 macOS 实现把左右键的按下事件
+// 都当成左键处理并吞掉, 设了点击回调后菜单就弹不出来. 打开界面统一走菜单项.
 //
 // 托盘事件循环必须占用主 goroutine, HTTP 服务与调度器在后台运行.
 package tray
@@ -96,16 +99,12 @@ func (t *Tray) Run(ctx context.Context) error {
 
 // onReady 在托盘就绪后构建菜单.
 func (t *Tray) onReady() {
-	// 左键单击直接打开界面, 右键弹出菜单.
-	systray.SetOnTapped(func() {
-		t.logger.Info("托盘左键单击", "action", "open")
-		if t.actions.Open != nil {
-			t.actions.Open()
-		}
-	})
-	systray.SetOnSecondaryTapped(func() {
-		t.logger.Debug("托盘右键单击", "action", "menu")
-	})
+	// 不要设置 SetOnTapped 或 SetOnSecondaryTapped.
+	//
+	// fyne.io/systray 的 macOS 实现 (systray_darwin.m) 里, 左右键的按下事件都走
+	// leftMouseClicked, 并在事件监听里被吞掉; 一旦 Go 侧设了点击回调,
+	// systray_left_click 就直接返回, 不再调用 show_menu(), 结果是右键弹不出菜单.
+	// 保持两个回调为空, 左右键都会走默认行为弹出菜单, 打开界面通过菜单项触发.
 
 	m := &menuItems{}
 	// 首项显示应用名与版本, 禁用不可点.
@@ -114,7 +113,7 @@ func (t *Tray) onReady() {
 	m.status = systray.AddMenuItem("正在启动", "任务运行概况")
 	m.status.Disable()
 	systray.AddSeparator()
-	m.open = systray.AddMenuItem("打开管理界面", "在浏览器中打开本地管理界面")
+	m.open = systray.AddMenuItem("打开主页面", "在浏览器中打开本地管理界面")
 	systray.AddSeparator()
 	m.quit = systray.AddMenuItem("退出", "退出 scherun")
 
