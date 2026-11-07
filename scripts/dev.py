@@ -15,11 +15,14 @@ import sys
 import time
 from pathlib import Path
 
+from output_encoding import configure_output_encoding
+
 ROOT = Path(__file__).resolve().parent.parent
 DEV_DIR = ROOT / ".tmp" / "scherun-dev"
 
 
 def main() -> int:
+    configure_output_encoding()
     parser = argparse.ArgumentParser(description="启动开发环境")
     parser.add_argument("--port", type=int, default=20008, help="后端监听端口")
     args = parser.parse_args()

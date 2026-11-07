@@ -12,6 +12,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from output_encoding import configure_output_encoding
+
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "web" / "dist"
 TARGET = ROOT / "internal" / "webui" / "dist"
@@ -21,6 +23,8 @@ KEEP = {".gitkeep"}
 
 
 def main() -> int:
+    configure_output_encoding()
+
     if not SOURCE.is_dir():
         print(f"找不到前端构建产物: {SOURCE}", file=sys.stderr)
         print("请先运行 just web", file=sys.stderr)

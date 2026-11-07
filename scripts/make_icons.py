@@ -18,6 +18,8 @@ import sys
 import zlib
 from pathlib import Path
 
+from output_encoding import configure_output_encoding
+
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
 SOURCE = ASSETS / "icon-design" / "native-stack-1024.png"
@@ -216,6 +218,7 @@ def write_ico(pngs):
 
 
 def main() -> int:
+    configure_output_encoding()
     if not SOURCE.is_file():
         print(f"找不到设计源图: {SOURCE}", file=sys.stderr)
         return 1

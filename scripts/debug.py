@@ -15,11 +15,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+from output_encoding import configure_output_encoding
+
 ROOT = Path(__file__).resolve().parent.parent
 DEBUG_DIR = ROOT / ".tmp" / "scherun-debug"
 
 
 def main() -> int:
+    configure_output_encoding()
     parser = argparse.ArgumentParser(description="启动隔离的调试实例")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--build-only", action="store_true", help="只构建不启动")

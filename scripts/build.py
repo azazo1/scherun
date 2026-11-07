@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from output_encoding import configure_output_encoding
+
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = "./cmd/scherun"
 MODULE = "github.com/azazo1/scherun"
@@ -72,6 +74,7 @@ def build_version() -> tuple[str, str]:
 
 
 def main() -> int:
+    configure_output_encoding()
     parser = argparse.ArgumentParser(description="构建 scherun")
     parser.add_argument("--output", default="dist/scherun", help="输出路径")
     parser.add_argument("--version", default=None, help="直接指定版本号")
