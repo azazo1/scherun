@@ -50,6 +50,48 @@ DIST = "dist"
 STAGE_ROOT = os.path.join(DIST, "stage")
 
 
+def host_target():
+    """取当前构建机真实的 GOOS 与 GOARCH.
+
+    不能用 go env: 它会读取 GOOS / GOARCH 环境变量, 于是设了交叉目标之后
+    "宿主平台" 也会跟着变成目标平台, 冒烟检查就会去执行跑不起来的产物.
+    这里从 go env 的默认值文件里取, 并清掉这两个变量后再问一次.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("GOOS", "GOARCH")}
+    goos = rc.try_run(["go", "env", "GOOS"], env=env) or ""
+    goarch = rc.try_run(["go", "env", "GOARCH"], env=env) or ""
+    return goos, goarch
+
+
+def build_target():
+    """返回本次构建的 (GOOS, GOARCH).
+
+    默认就是宿主平台. 设了 GOOS / GOARCH 时按它们构建, 产物命名也跟着走,
+    否则会出现 "名字是 linux 内容是 darwin" 的错配产物.
+    注意: 托盘依赖 cgo, 交叉出来的产物在目标平台跑不起来, 正式发布请用原生 runner.
+    """
+    host_goos, host_goarch = host_target()
+    goos = os.environ.get("GOOS") or host_goos
+    goarch = os.environ.get("GOARCH") or host_goarch
+    return goos, goarch, (goos, goarch) == (host_goos, host_goarch)
+
+
+def goos_to_platform(goos):
+    """GOOS 到产物命名平台 token 的映射."""
+    mapping = {"darwin": "macos", "linux": "linux", "windows": "windows"}
+    if goos not in mapping:
+        rc.die(f"无法识别目标平台 {goos}, 请检查 GOOS")
+    return mapping[goos]
+
+
+def goarch_to_arch(goarch):
+    """GOARCH 到产物命名架构 token 的映射."""
+    mapping = {"amd64": "x86_64", "arm64": "aarch64"}
+    if goarch not in mapping:
+        rc.die(f"无法识别目标架构 {goarch}, 请检查 GOARCH")
+    return mapping[goarch]
+
+
 def main():
     rc.configure_output_encoding()
     rc.repo_root()
@@ -57,13 +99,15 @@ def main():
     display_version, archive_version = rc.resolve_versions(
         rc.script_path("build-version.py"), PACKAGE_VERSION
     )
-    target_platform, target_arch = rc.target_platform(), rc.target_arch()
+    goos, goarch, is_host = build_target()
+    target_platform = goos_to_platform(goos)
+    target_arch = goarch_to_arch(goarch)
 
     print(f"构建 {PROJECT_NAME} {display_version} ({target_platform}-{target_arch})")
 
     build_web()
     staging = rc.stage_dir(os.path.join(STAGE_ROOT, f"{target_platform}-{target_arch}"))
-    binary = build_binary(staging, display_version)
+    binary = build_binary(staging, display_version, goos, goarch, is_host)
 
     if target_platform == "macos":
         package_macos(staging, binary, display_version, archive_version, target_arch)
@@ -89,14 +133,15 @@ def build_web():
     rc.run([sys.executable, EMBED_SCRIPT])
 
 
-def build_binary(staging, display_version):
+def build_binary(staging, display_version, goos, goarch, is_host):
     """编译 Go 二进制, 注入版本号.
 
     注入路径用 go list -m 取模块名, 不要手写, 改模块名时会静默失效.
-    托盘需要 cgo, 所以这里不设 CGO_ENABLED=0.
+    托盘需要 cgo, 因此这里不设 CGO_ENABLED=0: 正式发布必须在目标平台原生构建,
+    设了 GOOS / GOARCH 只会得到跑不起来的产物.
     """
     module = rc.run(["go", "list", "-m"])
-    binary_name = BINARY_NAME + (".exe" if rc.target_platform() == "windows" else "")
+    binary_name = BINARY_NAME + (".exe" if goos == "windows" else "")
     binary = os.path.join(staging, binary_name)
 
     ldflags = [
@@ -106,8 +151,12 @@ def build_binary(staging, display_version):
     ]
     # Windows release 构建声明为 GUI 子系统, 避免双击时闪出控制台窗口;
     # 日志仍写入数据目录下的文件, 不受影响.
-    if rc.target_platform() == "windows":
+    if goos == "windows":
         ldflags.insert(0, "-H=windowsgui")
+
+    env = os.environ.copy()
+    env["GOOS"] = goos
+    env["GOARCH"] = goarch
 
     rc.run(
         [
@@ -121,11 +170,18 @@ def build_binary(staging, display_version):
             binary,
             MAIN_PACKAGE,
         ],
+        env=env,
         capture=False,
     )
 
     # 注入失效时 -X 不报错, 必须校验一次.
-    if rc.target_platform() == "windows":
+    if not is_host:
+        # 非宿主平台的产物跑不起来, 退化为文件格式, 架构与版本串检查.
+        target_platform = goos_to_platform(goos)
+        rc.check_binary_format(binary, target_platform)
+        rc.check_binary_arch(binary, target_platform, goarch_to_arch(goarch))
+        rc.check_version_string(binary, display_version)
+    elif goos == "windows":
         # GUI 子系统程序没有可读的标准输出, 直接运行既拿不到版本号, 又可能让 CI 等不到退出,
         # 改为在产物字节里核对注入的版本串.
         rc.check_version_string(binary, display_version)
@@ -354,13 +410,20 @@ def find_inno_setup():
 
 
 def package_linux(staging, binary, display_version, archive_version, target_arch):
-    """Linux 出可执行文件的 tar.gz 归档."""
+    """Linux 出可执行文件的 tar.gz 归档, 附带许可证与说明."""
     os.chmod(binary, os.stat(binary).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     rc.check_binary_format(binary, "linux")
     rc.check_binary_arch(binary, "linux", target_arch)
+
+    entries = [os.path.basename(binary)]
+    for extra in ("LICENSE", "README.md"):
+        if os.path.isfile(extra):
+            shutil.copy(extra, os.path.join(staging, extra))
+            entries.append(extra)
+
     rc.archive(
         staging,
-        [os.path.basename(binary)],
+        entries,
         PROJECT_NAME,
         archive_version,
         target=("linux", target_arch),
