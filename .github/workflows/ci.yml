@@ -1,0 +1,432 @@
+name: CI
+
+# 普通分支与 PR 只做检查并上传 Actions artifact; tag push 或手动填写 tag 才创建 Release.
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的已有 tag, 留空时只跑检查"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      is_release: ${{ steps.release_context.outputs.is_release }}
+      tag_name: ${{ steps.release_context.outputs.tag_name }}
+      source_ref: ${{ steps.release_context.outputs.source_ref }}
+      version: ${{ steps.release_version.outputs.version }}
+      build_version: ${{ steps.build_version.outputs.build_version }}
+    steps:
+      - name: 解析发布上下文
+        id: release_context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref }}
+          CURRENT_REF_NAME: ${{ github.ref_name }}
+          CURRENT_SHA: ${{ github.sha }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          is_release=false
+          tag_name=""
+          source_ref="$CURRENT_SHA"
+
+          if [[ "$EVENT_NAME" == "push" && "$CURRENT_REF" == refs/tags/* ]]; then
+            is_release=true
+            tag_name="$CURRENT_REF_NAME"
+            source_ref="$CURRENT_REF"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$DISPATCH_TAG" ]]; then
+            git check-ref-format "refs/tags/$DISPATCH_TAG"
+            is_release=true
+            tag_name="$DISPATCH_TAG"
+            source_ref="refs/tags/$DISPATCH_TAG"
+          fi
+
+          echo "is_release=$is_release" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+
+      - name: 检出目标提交
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release_context.outputs.source_ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 准备 uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      # Go 没有包版本可读, tag 是唯一版本来源, 这里只校验 tag 与说明文件.
+      - name: 校验发布版本
+        id: release_version
+        if: steps.release_context.outputs.is_release == 'true'
+        env:
+          TAG_NAME: ${{ steps.release_context.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TAG_NAME" != v* ]]; then
+            echo "发布 tag 必须以 v 开头: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          version="${TAG_NAME#v}"
+          manual_notes="docs/changelog/$version.md"
+          if [[ ! -s "$manual_notes" ]]; then
+            echo "缺少 release notes: $manual_notes" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # build_version 在任何触发方式下都要有值, 首个 tag 之前的运行靠占位版本加短 hash.
+      - name: 解析构建版本
+        id: build_version
+        env:
+          IS_RELEASE: ${{ steps.release_context.outputs.is_release }}
+          RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            echo "build_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Go 项目没有包版本, 用 0.0.0 占位; scripts/dist.py 内部读的是同一个常量.
+          echo "build_version=$(PROJECT_PACKAGE_VERSION=0.0.0 uv run --no-project python scripts/build-version.py)" >> "$GITHUB_OUTPUT"
+
+  # 托盘依赖 cgo, 产物绑定构建机的系统库, 因此按原生 runner 构建, 不做交叉编译.
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos
+            arch: aarch64
+            variant: ""
+          - runner: macos-15-intel
+            platform: macos
+            arch: x86_64
+            variant: ""
+          - runner: windows-2025
+            platform: windows
+            arch: x86_64
+            variant: setup
+          - runner: windows-11-arm
+            platform: windows
+            arch: aarch64
+            variant: setup
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+            variant: ""
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+            variant: ""
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: 检出目标提交
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 准备 Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 准备 bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 准备 uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      # Inno Setup 不在托管 runner 镜像里, 只在 Windows 上装.
+      - name: 准备 Inno Setup
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --no-progress -y
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "Inno Setup 安装后找不到 ISCC.exe: $iscc"
+          }
+          "INNO_SETUP_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 前端依赖缓存
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ matrix.arch }}-bun-${{ hashFiles('web/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-bun-
+
+      - name: 生成当前平台发布产物
+        env:
+          PROJECT_BUILD_VERSION: v${{ needs.version.outputs.build_version }}
+        run: uv run --no-project python scripts/dist.py
+
+      # 安装器只检查文件存在发现不了载荷漏打, 这里真装一次再卸掉.
+      - name: 校验安装器能静默装出完整载荷
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -LiteralPath 'dist' -Filter '*-setup.exe' | Select-Object -First 1
+          if ($null -eq $installer) { throw "dist 下没有找到安装器" }
+
+          $target = Join-Path $env:RUNNER_TEMP 'installer-check'
+          $log = Join-Path $env:RUNNER_TEMP 'installer-check.log'
+          & $installer.FullName '/SP-' '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/NOICONS' "/DIR=$target" "/LOG=$log"
+          if ($LASTEXITCODE -ne 0) { throw "安装器退出码: $LASTEXITCODE, 日志: $log" }
+
+          foreach ($name in @('scherun.exe', 'scherun.ico')) {
+            $installed = Join-Path $target $name
+            if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
+              throw "安装目录缺少: $installed"
+            }
+          }
+
+          $uninstaller = Join-Path $target 'unins000.exe'
+          if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+            throw "安装目录缺少卸载器: $uninstaller"
+          }
+          & $uninstaller '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART'
+          if ($LASTEXITCODE -ne 0) { throw "卸载器退出码: $LASTEXITCODE" }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          # artifact 名与产物名同构: 桌面应用安装版带 setup 变体段.
+          name: scherun-${{ needs.version.outputs.build_version }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.variant != '' && format('-{0}', matrix.variant) || '' }}
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # 各平台测试用原生 runner 覆盖, 与构建分开, 不阻塞发布.
+  test:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: 检出目标提交
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 准备 Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 格式检查
+        if: matrix.os != 'windows-2025'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l cmd internal)"
+          if [[ -n "$unformatted" ]]; then
+            echo "以下文件未格式化:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: 静态检查
+        run: go vet ./...
+
+      - name: 运行测试
+        run: go test ./... -count=1
+
+  release:
+    if: needs.version.outputs.is_release == 'true'
+    needs: [version, build, test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: 检出发布 tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      # fetch-depth: 0 不能代替精确 refetch, 这里要拿到目标 tag 的真实 object.
+      - name: 重新获取 annotated tag object
+        env:
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/tags/$TAG_NAME"
+          git fetch --force origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+
+      - name: 校验 tag annotation
+        env:
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_ref="refs/tags/$TAG_NAME"
+          manual_notes="docs/changelog/$VERSION.md"
+
+          if [[ ! -s "$manual_notes" ]]; then
+            echo "缺少 release notes: $manual_notes" >&2
+            exit 1
+          fi
+
+          tag_type="$(git cat-file -t "$tag_ref")"
+          if [[ "$tag_type" != "tag" ]]; then
+            echo "发布 tag 必须是 annotated tag: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          git cat-file tag "$tag_ref" | sed '1,/^$/d' > tag-notes.md
+          if ! grep -q '[^[:space:]]' tag-notes.md; then
+            echo "发布 tag 的 annotation 不能为空: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          if ! cmp -s "$manual_notes" tag-notes.md; then
+            echo "发布 tag 的 annotation 与 $manual_notes 不一致" >&2
+            diff -u "$manual_notes" tag-notes.md || true
+            exit 1
+          fi
+
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: 生成校验和
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd release-artifacts
+          archives=(scherun-*.dmg scherun-*.exe scherun-*.tar.gz)
+
+          # 6 个矩阵项各出一份产物: macOS 2 个 dmg, Windows 2 个安装器, Linux 2 个 tar.gz.
+          if (( ${#archives[@]} != 6 )); then
+            echo "预期 6 个归档, 实际找到 ${#archives[@]} 个" >&2
+            ls -la >&2
+            exit 1
+          fi
+
+          sha256sum "${archives[@]}" > SHA256SUMS
+
+      - name: 生成 release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manual_notes="docs/changelog/$VERSION.md"
+          base_tag_file="docs/changelog/$VERSION-base.txt"
+          api_args=(
+            --method POST
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes"
+            -f "tag_name=$TAG_NAME"
+          )
+
+          target_sha="$(git rev-parse HEAD)"
+          api_args+=(-f "target_commitish=$target_sha")
+
+          if [[ -s "$base_tag_file" ]]; then
+            base_tag="$(<"$base_tag_file")"
+            git check-ref-format "refs/tags/$base_tag"
+            api_args+=(-f "previous_tag_name=$base_tag")
+          fi
+
+          gh api "${api_args[@]}" --jq '.body' > generated-notes.md
+          cp "$manual_notes" release-notes.md
+
+          if [[ -s generated-notes.md ]]; then
+            printf '\n---\n\n' >> release-notes.md
+            cat generated-notes.md >> release-notes.md
+          fi
+
+      - name: 创建或更新 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(
+            release-artifacts/scherun-*.dmg
+            release-artifacts/scherun-*.exe
+            release-artifacts/scherun-*.tar.gz
+            release-artifacts/SHA256SUMS
+          )
+
+          # 6 个归档加一份 SHA256SUMS.
+          if (( ${#assets[@]} != 7 )); then
+            echo "预期 7 个发布文件, 实际找到 ${#assets[@]} 个" >&2
+            exit 1
+          fi
+
+          prerelease_args=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --verify-tag \
+              --title "scherun v$VERSION" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG_NAME" "${assets[@]}" \
+              --verify-tag \
+              --title "scherun v$VERSION" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
+          fi

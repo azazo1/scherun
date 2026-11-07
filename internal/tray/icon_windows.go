@@ -2,7 +2,19 @@
 
 package tray
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"fyne.io/systray"
+)
+
+// setIcon 在 Windows 上使用彩色图标.
+//
+// Windows 通知区域不按模板图标处理, 传模板图会得到纯黑图标, 因此直接走 SetIcon.
+// 彩色 PNG 要先包成单图 ICO, 否则通知区域不认.
+func setIcon(template, regular []byte) {
+	systray.SetIcon(platformIcon(regular))
+}
 
 // platformIcon 把 PNG 包装成单图 ICO, 供 Windows 通知区域使用.
 func platformIcon(pngData []byte) []byte {

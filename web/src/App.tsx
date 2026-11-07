@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Moon,
   Plus,
+  Power,
   RefreshCw,
   Search,
   Settings,
@@ -51,6 +52,7 @@ function AppShell() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null)
+  const [quitOpen, setQuitOpen] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem('scherun-theme')
@@ -209,6 +211,17 @@ function AppShell() {
     }
   }
 
+  // 退出应用: 先让后端停止全部任务再退出进程, 页面随后失去连接.
+  const handleQuit = async () => {
+    setQuitOpen(false)
+    try {
+      await appApi.exit()
+      toast.success('正在退出', '全部任务停止后进程结束, 可以关闭此页面')
+    } catch (err) {
+      toast.error('退出失败', err instanceof Error ? err.message : undefined)
+    }
+  }
+
   const openCreate = () => {
     setEditing(undefined)
     setEditorOpen(true)
@@ -275,6 +288,15 @@ function AppShell() {
               onClick={() => setSettingsOpen(true)}
             >
               <Settings className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="退出应用"
+              title="退出应用"
+              onClick={() => setQuitOpen(true)}
+            >
+              <Power className="h-4 w-4" />
             </Button>
             <Button variant="primary" size="md" onClick={openCreate}>
               <Plus className="h-4 w-4" />
@@ -397,6 +419,33 @@ function AppShell() {
             {pendingDelete?.name}
           </span>
           吗? 如果它正在运行, 会被先停止.
+        </p>
+      </Dialog>
+
+      <Dialog
+        open={quitOpen}
+        onClose={() => setQuitOpen(false)}
+        title="退出 scherun"
+        description="托盘常驻程序会一并结束"
+        width="max-w-sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setQuitOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="primary"
+              className="bg-[var(--danger)]"
+              onClick={() => void handleQuit()}
+            >
+              退出
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-[var(--content-muted)]">
+          退出后所有运行中的任务会被停止, 自动触发也会一并结束.
+          想让它继续在后台跑, 关闭此页面即可.
         </p>
       </Dialog>
     </div>

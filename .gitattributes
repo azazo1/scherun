@@ -1,0 +1,10 @@
+# 统一用 LF 行尾.
+#
+# Windows 上 Git 默认 core.autocrlf=true 会把文本文件检出成 CRLF,
+# 于是 CI 里的 gofmt 会把所有 .go 文件都判为未格式化.
+* text=auto eol=lf
+
+# 二进制资源不做行尾转换, 否则图标会被改坏.
+*.png binary
+*.icns binary
+*.ico binary

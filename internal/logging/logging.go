@@ -48,8 +48,9 @@ func Init(opts Options) (*Logger, error) {
 		retention = 5
 	}
 
-	handlers := []slog.Handler{
-		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}),
+	var handlers []slog.Handler
+	if stderrUsable() {
+		handlers = append(handlers, slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	}
 
 	var closer io.Closer
@@ -72,6 +73,17 @@ func Init(opts Options) (*Logger, error) {
 	}
 
 	return &Logger{Logger: slog.New(&multiHandler{handlers: handlers}), closer: closer}, nil
+}
+
+// stderrUsable 判断终端输出是否可用.
+//
+// Windows 安装版声明为 GUI 子系统, 此时 stderr 句柄无效, 写进去只会失败;
+// 而 release 构建不带控制台, 终端输出本来也没人看. 文件日志不受影响.
+//
+// 用 Stat 探测而不是按平台写死: 从终端启动的调试构建仍能保留终端日志.
+func stderrUsable() bool {
+	_, err := os.Stderr.Stat()
+	return err == nil
 }
 
 // Close 刷盘并关闭日志文件.

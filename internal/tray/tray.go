@@ -141,6 +141,9 @@ func (t *Tray) loop(name string, ch <-chan struct{}, fn func()) {
 }
 
 // apply 把状态刷新到图标与菜单.
+//
+// macOS 菜单栏要求模板图标 (纯黑加 alpha, 系统按明暗自动反色), 因此那里用单色的
+// 卡片剪影, 状态信息交给菜单里的汇总行; Windows 与 Linux 继续用带状态色点的彩色图标.
 func (t *Tray) apply() {
 	t.mu.Lock()
 	ready := t.ready
@@ -151,7 +154,7 @@ func (t *Tray) apply() {
 		return
 	}
 
-	systray.SetIcon(platformIcon(iconPNG(state.IconKind())))
+	setIcon(templateIconPNG(), iconPNG(state.IconKind()))
 	systray.SetTooltip(state.TooltipFor(t.appName))
 	m.status.SetTitle(state.SummaryItem())
 }

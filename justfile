@@ -20,6 +20,14 @@ web:
 build: web
     uv run --no-project python scripts/build.py
 
+# 生成当前平台的发布产物: macOS 出 .app 与 dmg, Windows 出安装器, Linux 出 tar.gz.
+dist:
+    uv run --no-project python scripts/dist.py
+
+# 生成图标资源 (assets/icon.icns, icon.ico, icon-1024.png).
+icons:
+    uv run --no-project python scripts/make_icons.py
+
 # 启动应用 (自动打开浏览器).
 run: build
     ./dist/scherun
