@@ -8,8 +8,10 @@ import (
 // TestExpandHome 验证开头的 ~ 被展开成家目录.
 func TestExpandHome(t *testing.T) {
 	// 用临时目录冒充家目录, 避免触碰真实用户目录.
+	// 两个变量都要设: Unix 的 os.UserHomeDir 读 HOME, Windows 读 USERPROFILE.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	cases := []struct {
 		name string
@@ -36,6 +38,7 @@ func TestExpandHome(t *testing.T) {
 func TestResolve(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	if got := Resolve("/base", "~/x"); got != filepath.Join(home, "x") {
 		t.Fatalf("~ 应优先于基准目录展开, 实际 %q", got)
@@ -43,7 +46,9 @@ func TestResolve(t *testing.T) {
 	if got := Resolve("/base", "y"); got != filepath.Join("/base", "y") {
 		t.Fatalf("相对路径应按基准目录拼接, 实际 %q", got)
 	}
-	if got := Resolve("/base", "/abs"); got != "/abs" {
+	// 绝对路径按平台自己的形式给: /abs 在 Windows 上没有盘符, 不算绝对路径.
+	abs := filepath.Join(home, "abs")
+	if got := Resolve("/base", abs); got != abs {
 		t.Fatalf("绝对路径应原样返回, 实际 %q", got)
 	}
 	if got := Resolve("", "y"); got != "y" {
@@ -53,8 +58,9 @@ func TestResolve(t *testing.T) {
 
 // TestExpandHomeWithoutHome 验证取不到家目录时原样返回, 不 panic.
 func TestExpandHomeWithoutHome(t *testing.T) {
-	// 清空 HOME, 让 UserHomeDir 走回退逻辑或失败.
+	// 清空家目录变量, 让 UserHomeDir 走回退逻辑或失败.
 	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
 	// 无论能否取到家目录, 都不应 panic, 且返回值非空.
 	if got := ExpandHome("~/x"); got == "" {
 		t.Fatal("取不到家目录时也应返回原始路径")

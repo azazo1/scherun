@@ -2,9 +2,18 @@ package cmdparse
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// programName 返回程序路径的文件名, 去掉 Windows 的 .exe 后缀.
+//
+// 解析会把能找到的命令补成绝对路径, 所以断言只能看文件名;
+// Windows 上补出来的是 xxx.exe, 直接用 suffix 比对会失败.
+func programName(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), ".exe")
+}
 
 // TestParseDockerRun 覆盖最典型的场景: 一条带环境变量与参数的长命令.
 func TestParseDockerRun(t *testing.T) {
@@ -14,7 +23,7 @@ func TestParseDockerRun(t *testing.T) {
 	}
 
 	// 程序名应被解析成绝对路径 (docker 在 PATH 里时).
-	if !strings.HasSuffix(result.Program, "docker") {
+	if programName(result.Program) != "docker" {
 		t.Fatalf("程序应为 docker, 实际 %q", result.Program)
 	}
 
@@ -45,7 +54,7 @@ func TestParseEnvPrefix(t *testing.T) {
 	if result.EnvVars["NODE_ENV"] != "production" || result.EnvVars["PORT"] != "8080" {
 		t.Fatalf("环境变量解析错误: %v", result.EnvVars)
 	}
-	if !strings.HasSuffix(result.Program, "node") {
+	if programName(result.Program) != "node" {
 		t.Fatalf("程序应为 node, 实际 %q", result.Program)
 	}
 	if len(result.Args) != 1 || result.Args[0] != "server.js" {
@@ -113,7 +122,7 @@ func TestParseCdPrefix(t *testing.T) {
 	if result.WorkingDir != "/tmp/work" {
 		t.Fatalf("工作目录应为 /tmp/work, 实际 %q", result.WorkingDir)
 	}
-	if !strings.HasSuffix(result.Program, "python3") {
+	if programName(result.Program) != "python3" {
 		t.Fatalf("程序应为 python3, 实际 %q", result.Program)
 	}
 	if len(result.Args) != 1 || result.Args[0] != "run.py" {
@@ -127,7 +136,7 @@ func TestParsePipeWarns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
-	if !strings.HasSuffix(result.Program, "cat") {
+	if programName(result.Program) != "cat" {
 		t.Fatalf("应取第一段命令, 实际 %q", result.Program)
 	}
 	if len(result.Warnings) == 0 {
@@ -176,12 +185,16 @@ func TestParseMissingProgramWarns(t *testing.T) {
 
 // TestParseAbsolutePath 验证绝对路径直接采用.
 func TestParseAbsolutePath(t *testing.T) {
-	result, err := Parse(`/bin/echo hello`)
+	// 用平台自己的绝对路径: /bin/echo 在 Windows 上没有盘符, 不算绝对路径.
+	// 反斜杠在分词里是转义符, 因此统一换成 / 再拼进命令.
+	program := strings.ReplaceAll(filepath.Join(t.TempDir(), "echo"), "\\", "/")
+
+	result, err := Parse(program + " hello")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
-	if result.Program != "/bin/echo" {
-		t.Fatalf("程序应为 /bin/echo, 实际 %q", result.Program)
+	if result.Program != program {
+		t.Fatalf("程序应为 %q, 实际 %q", program, result.Program)
 	}
 	if !result.Resolved {
 		t.Fatal("绝对路径应标记为已解析")
