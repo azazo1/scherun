@@ -31,9 +31,27 @@ const (
 	StatusRunning Status = "running"
 	// StatusSuspended 因连续失败被暂停自动触发.
 	StatusSuspended Status = "suspended"
+	// StatusPaused 用户主动暂停了自动触发.
+	//
+	// 与 StatusDisabled 的区别: 停用是任务级配置, 会持久化, 重启应用后依然生效;
+	// 暂停只是本次运行的临时意愿, 点运行即可恢复, 不写回任务定义.
+	StatusPaused Status = "paused"
 	// StatusDisabled 任务已停用.
 	StatusDisabled Status = "disabled"
 )
+
+// autoRestartable 判断触发方式是否会自动拉起进程.
+//
+// 这类任务被用户停止后必须记住 "别再自动拉起", 否则停止按钮对它毫无作用:
+// 进程一退出就被调度器重新启动, 界面闪一下又回到运行中.
+func autoRestartable(kind task.TriggerKind) bool {
+	switch kind {
+	case task.TriggerKeepAlive, task.TriggerRoutine, task.TriggerUntilSucceed:
+		return true
+	default:
+		return false
+	}
+}
 
 // Warning 是一条运行时告警.
 type Warning struct {
@@ -279,6 +297,11 @@ func (s *Scheduler) runTask(ctx context.Context, initial task.Task, g *guard) {
 		exitCh  = make(chan processExited, 1)
 		// instantDone 表示定时一次已经执行过.
 		instantDone = false
+		// pausedByUser 表示用户主动暂停了自动触发.
+		//
+		// 只有 guard 协程读写, 不需要加锁. 自动重启类任务被停止后必须记住这件事:
+		// 否则进程一退出就被重新拉起, 停止按钮形同虚设.
+		pausedByUser = false
 	)
 
 	// reload 读取任务最新定义, 任务已被删除时返回 false.
@@ -361,25 +384,52 @@ func (s *Scheduler) runTask(ctx context.Context, initial task.Task, g *guard) {
 		current = nil
 		now := time.Now()
 
-		state.mu.Lock()
-		state.status = StatusIdle
-		state.pid = 0
-		state.startedAt = nil
-		state.lastExit = &code
-		state.mu.Unlock()
-
 		_ = s.db.SetLastExitCode(id, code)
 		s.logger.Info("任务已退出",
 			"task_id", id, "task", initial.Name, "exit_code", code, "at", now.Format(time.RFC3339))
 
 		latest, ok := reload()
 		if !ok {
+			// 任务已被删除, 状态随后会被调度器丢弃, 这里只清理运行信息.
+			state.mu.Lock()
+			state.status = StatusIdle
+			state.pid = 0
+			state.startedAt = nil
+			state.lastExit = &code
+			state.mu.Unlock()
 			return
 		}
+
+		// 用户主动暂停的自动任务显示为 paused, 让界面区分 "空闲" 与 "用户按停".
+		// 判定用最新定义: 用户可能刚把触发方式改成自动类, 这时暂停标记依然要生效.
+		paused := pausedByUser && autoRestartable(latest.Trigger.Kind)
+
 		state.mu.Lock()
+		// 挂起状态要在覆盖之前读取, 覆盖之后就只剩 idle / paused 了.
 		suspended := state.status == StatusSuspended
+		switch {
+		case suspended:
+			// 挂起是持续状态, 进程退出不该把它抹掉.
+			state.status = StatusSuspended
+		case paused:
+			state.status = StatusPaused
+		default:
+			state.status = StatusIdle
+		}
+		state.pid = 0
+		state.startedAt = nil
+		state.lastExit = &code
 		state.mu.Unlock()
+
 		if !latest.Enabled || suspended {
+			return
+		}
+		// 用户主动停止后不再自动拉起, 直到用户重新运行.
+		//
+		// 这一层判断必须在触发方式分支之前: 保活与直到成功都是 "退出就重启",
+		// 少了它, 用户按停止得到的只是几十毫秒的空闲.
+		if paused {
+			s.logger.Debug("任务已暂停, 跳过自动重启", "task_id", id)
 			return
 		}
 
@@ -475,12 +525,34 @@ func (s *Scheduler) runTask(ctx context.Context, initial task.Task, g *guard) {
 			case controlRun:
 				det.reset()
 				s.clearSuspended(state)
+				// 手动运行即视为恢复, 用户点了运行就说明希望它继续跑.
+				pausedByUser = false
+				// 先退回空闲再启动, 启动失败时界面不会残留一个已经失效的暂停标记.
+				state.mu.Lock()
+				if state.status == StatusPaused {
+					state.status = StatusIdle
+				}
+				state.mu.Unlock()
 				err := launch("manual")
 				if msg.reply != nil {
 					msg.reply <- err
 				}
 			case controlStop:
+				// 先记暂停再停进程: 退出通知由 handleExit 处理,
+				// 顺序反过来的话退出分支会先看到未暂停而把进程重新拉起.
+				pausedByUser = true
+				wasRunning := current != nil
 				stopCurrent("manual")
+				// 进程本来就没在跑时不会有退出通知, 这里直接把状态置为暂停,
+				// 否则界面看不出用户刚刚按了停止. 挂起状态不覆盖, 它表达的是
+				// "连续失败" 这一更重要的信息.
+				if !wasRunning && autoRestartable(initial.Trigger.Kind) {
+					state.mu.Lock()
+					if state.status != StatusSuspended {
+						state.status = StatusPaused
+					}
+					state.mu.Unlock()
+				}
 				if msg.reply != nil {
 					msg.reply <- nil
 				}
@@ -490,7 +562,7 @@ func (s *Scheduler) runTask(ctx context.Context, initial task.Task, g *guard) {
 			state.mu.Lock()
 			suspended := state.status == StatusSuspended
 			state.mu.Unlock()
-			if suspended || current != nil {
+			if suspended || pausedByUser || current != nil {
 				continue
 			}
 			if err := launch("routine"); err != nil {

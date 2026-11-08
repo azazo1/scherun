@@ -17,7 +17,7 @@ export interface Trigger {
 }
 
 /** 任务运行状态. */
-export type TaskStatus = 'idle' | 'running' | 'suspended' | 'disabled'
+export type TaskStatus = 'idle' | 'running' | 'suspended' | 'paused' | 'disabled'
 
 /** 任务定义与运行状态的合并视图. */
 export interface Task {

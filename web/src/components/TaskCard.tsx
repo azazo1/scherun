@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CircleSlash,
   GripVertical,
+  Pause,
   Pencil,
   Play,
   Square,
@@ -28,15 +29,18 @@ interface TaskCardProps {
 function StatusDot({ task }: { task: Task }) {
   const running = isRunning(task)
   const suspended = task.status === 'suspended'
+  const paused = task.status === 'paused'
   const disabled = !task.enabled
 
   const color = suspended
     ? 'var(--warning)'
     : disabled
       ? 'var(--content-faint)'
-      : running
-        ? 'var(--success)'
-        : 'var(--content-faint)'
+      : paused
+        ? 'var(--content-muted)'
+        : running
+          ? 'var(--success)'
+          : 'var(--content-faint)'
 
   return (
     <span
@@ -69,6 +73,14 @@ function StatusBadge({ task }: { task: Task }) {
       <span className="inline-flex items-center gap-1 rounded-md bg-[var(--surface-sunken)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--content-faint)]">
         <CircleSlash className="h-3 w-3" />
         已停用
+      </span>
+    )
+  }
+  if (task.status === 'paused') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-[var(--surface-sunken)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--content-muted)]">
+        <Pause className="h-3 w-3" />
+        已暂停
       </span>
     )
   }

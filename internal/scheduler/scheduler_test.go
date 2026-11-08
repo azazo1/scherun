@@ -238,3 +238,155 @@ func TestWarningsAreDrained(t *testing.T) {
 		t.Fatalf("告警应被取空, 实际 %+v", again)
 	}
 }
+
+// waitForStatus 轮询等待任务进入指定状态.
+func waitForStatus(t *testing.T, sched *Scheduler, id int64, want Status) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if sched.Snapshot(id).Status == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("任务未进入 %s 状态: %+v", want, sched.Snapshot(id))
+}
+
+// TestStopKeepAliveTaskPauses 验证停止保活任务会暂停, 而不是被立刻重新拉起.
+//
+// 这是保活任务最容易出错的语义: 进程一退出调度器就想重启, 于是停止按钮
+// 只换来几十毫秒的空闲. 停止必须记下用户意图, 直到用户手动运行才恢复.
+func TestStopKeepAliveTaskPauses(t *testing.T) {
+	sched := newTestScheduler(t)
+	if err := sched.Start(); err != nil {
+		t.Fatalf("启动调度器失败: %v", err)
+	}
+
+	sh := shellCommand(t, "")
+	id, err := sched.SaveTask(task.Task{
+		Name:    "保活",
+		Program: sh,
+		Args:    []string{"-c", "sleep 60"},
+		Trigger: task.Trigger{Kind: task.TriggerKeepAlive},
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	waitForStatus(t, sched, id, StatusRunning)
+
+	if err := sched.StopTask(id); err != nil {
+		t.Fatalf("停止任务失败: %v", err)
+	}
+	waitForStatus(t, sched, id, StatusPaused)
+
+	// 多等一会, 确认暂停期间没有被自动拉起.
+	time.Sleep(500 * time.Millisecond)
+	if snap := sched.Snapshot(id); snap.Status != StatusPaused {
+		t.Fatalf("停止后的保活任务应保持暂停, 实际 %+v", snap)
+	}
+
+	// 手动运行即恢复.
+	if err := sched.RunTask(id); err != nil {
+		t.Fatalf("恢复运行失败: %v", err)
+	}
+	waitForStatus(t, sched, id, StatusRunning)
+}
+
+// TestStopUntilSucceedTaskStopsRetrying 验证停止后不再继续重试.
+//
+// 直到成功没有失败上限, 不记暂停意图的话它会一直重试, 除了停用任务没有别的刹车.
+func TestStopUntilSucceedTaskStopsRetrying(t *testing.T) {
+	sched := newTestScheduler(t)
+	if err := sched.Start(); err != nil {
+		t.Fatalf("启动调度器失败: %v", err)
+	}
+
+	sh := shellCommand(t, "")
+	id, err := sched.SaveTask(task.Task{
+		Name:    "一直失败",
+		Program: sh,
+		Args:    []string{"-c", "exit 1"},
+		Trigger: task.Trigger{Kind: task.TriggerUntilSucceed},
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	// 先确认它确实在反复重试: 观察最近运行时间是否持续前移.
+	//
+	// 这里不用重启次数: 那个计数只对保活累加, 直到成功分支并不更新它.
+	deadline := time.Now().Add(10 * time.Second)
+	var first time.Time
+	for time.Now().Before(deadline) {
+		if snap := sched.Snapshot(id); snap.LastRunAt != nil {
+			first = *snap.LastRunAt
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if first.IsZero() {
+		t.Fatal("任务未开始运行")
+	}
+	for time.Now().Before(deadline) {
+		snap := sched.Snapshot(id)
+		if snap.LastRunAt != nil && snap.LastRunAt.After(first) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	snap := sched.Snapshot(id)
+	if snap.LastRunAt == nil || !snap.LastRunAt.After(first) {
+		t.Fatal("任务应当反复重试")
+	}
+
+	if err := sched.StopTask(id); err != nil {
+		t.Fatalf("停止任务失败: %v", err)
+	}
+	waitForStatus(t, sched, id, StatusPaused)
+
+	paused := sched.Snapshot(id)
+	stoppedAt := *paused.LastRunAt
+	time.Sleep(500 * time.Millisecond)
+	if after := sched.Snapshot(id); after.LastRunAt != nil && after.LastRunAt.After(stoppedAt) {
+		t.Fatalf("暂停后不应继续重试, 最近运行时间由 %v 变为 %v", stoppedAt, *after.LastRunAt)
+	}
+}
+
+// TestStopRoutineTaskSkipsTicks 验证暂停期间定时触发不再生效.
+func TestStopRoutineTaskSkipsTicks(t *testing.T) {
+	sched := newTestScheduler(t)
+	if err := sched.Start(); err != nil {
+		t.Fatalf("启动调度器失败: %v", err)
+	}
+
+	sh := shellCommand(t, "")
+	id, err := sched.SaveTask(task.Task{
+		Name:    "定时",
+		Program: sh,
+		Args:    []string{"-c", "sleep 60"},
+		Trigger: task.Trigger{Kind: task.TriggerRoutine, IntervalSeconds: 1},
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	if err := sched.RunTask(id); err != nil {
+		t.Fatalf("运行任务失败: %v", err)
+	}
+	waitForStatus(t, sched, id, StatusRunning)
+
+	if err := sched.StopTask(id); err != nil {
+		t.Fatalf("停止任务失败: %v", err)
+	}
+	waitForStatus(t, sched, id, StatusPaused)
+
+	// 跨过至少一个间隔, 暂停期间不该被 ticker 重新触发.
+	time.Sleep(1500 * time.Millisecond)
+	if snap := sched.Snapshot(id); snap.Status != StatusPaused {
+		t.Fatalf("暂停期间定时任务不应被触发, 实际 %+v", snap)
+	}
+}

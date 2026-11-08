@@ -133,7 +133,8 @@ function AppShell() {
     const running = tasks.filter((task) => task.status === 'running').length
     const disabled = tasks.filter((task) => !task.enabled).length
     const suspended = tasks.filter((task) => task.status === 'suspended').length
-    return { total: tasks.length, running, disabled, suspended }
+    const paused = tasks.filter((task) => task.status === 'paused').length
+    return { total: tasks.length, running, disabled, suspended, paused }
   }, [tasks])
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -186,7 +187,16 @@ function AppShell() {
     setBusyId(task.id)
     try {
       await taskApi.stop(task.id)
-      toast.success(`已停止 ${task.name}`)
+      // 自动触发的任务停止后会被暂停, 不再自动拉起, 提示要区分这一点,
+      // 否则用户会以为它只是停了一下, 等会还会自己回来.
+      const autoRestart =
+        task.trigger.kind === 'KeepAlive' ||
+        task.trigger.kind === 'Routine' ||
+        task.trigger.kind === 'UntilSucceed'
+      toast.success(
+        autoRestart ? `已暂停 ${task.name}` : `已停止 ${task.name}`,
+        autoRestart ? '自动触发已暂停, 点击运行可恢复' : undefined,
+      )
     } catch (err) {
       toast.error('停止失败', err instanceof Error ? err.message : undefined)
     } finally {
@@ -308,9 +318,10 @@ function AppShell() {
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-5 py-5">
         {/* 概览. */}
-        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-5">
           <StatCard label="任务总数" value={stats.total} />
           <StatCard label="运行中" value={stats.running} tone="success" />
+          <StatCard label="已暂停" value={stats.paused} />
           <StatCard label="已停用" value={stats.disabled} />
           <StatCard
             label="已挂起"
